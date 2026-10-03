@@ -1,0 +1,35 @@
+{
+  "name": "carrental-erp",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Car Rental Management System - multi-tenant ERP for car hire companies",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "db:setup": "node scripts/neon-setup.mjs",
+    "db:setup:force": "node scripts/neon-setup.mjs --force",
+    "db:schema": "node scripts/neon-setup.mjs --schema-only",
+    "db:check": "node scripts/neon-check.mjs"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.2.0",
+    "lucide-react": "^0.511.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.6.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.27.0",
+    "@tailwindcss/vite": "^4.1.7",
+    "@vitejs/plugin-react": "^4.4.1",
+    "eslint": "^9.27.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.19",
+    "globals": "^16.1.0",
+    "tailwindcss": "^4.1.7",
+    "vite": "^6.3.5"
+  }
+}
