@@ -5,6 +5,7 @@
   "framework": "vite",
   "functions": {
     "api/*.js": {
+      "runtime": "nodejs22.x",
       "maxDuration": 30
     }
   },

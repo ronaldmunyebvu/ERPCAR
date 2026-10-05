@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
   "description": "Car Rental Management System - multi-tenant ERP for car hire companies",
   "scripts": {
     "dev": "vite",
