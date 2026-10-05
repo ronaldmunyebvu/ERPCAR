@@ -12,7 +12,9 @@
     "db:setup": "node scripts/neon-setup.mjs",
     "db:setup:force": "node scripts/neon-setup.mjs --force",
     "db:schema": "node scripts/neon-setup.mjs --schema-only",
-    "db:check": "node scripts/neon-check.mjs"
+    "db:check": "node scripts/neon-check.mjs",
+    "api:check": "node --env-file=.env scripts/api-check.mjs",
+    "db:cleanup": "node --env-file=.env scripts/db-cleanup.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
@@ -33,3 +35,4 @@
     "vite": "^6.3.5"
   }
 }
+

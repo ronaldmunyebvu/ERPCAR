@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Building2, Check, Coins, Database, Info, RotateCcw, Save, ShieldCheck } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
-import { isNeonMode } from '@/db'
+import { isLiveMode } from '@/db'
 import { useRepository, useResource } from '@/hooks/useRepository'
 import { useToast } from '@/context/ToastContext'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -149,7 +149,7 @@ export default function CompanyPage() {
                 <Input value={values.country} onChange={set('country')} />
               </Field>
               <Field label="Logo URL" className="sm:col-span-2">
-                <Input value={values.logo_url} onChange={set('logo_url')} placeholder="https://…" />
+                <Input value={values.logo_url} onChange={set('logo_url')} placeholder="https://â€¦" />
               </Field>
             </div>
           </Card>
@@ -232,7 +232,7 @@ export default function CompanyPage() {
                   ['Currency', company.currency],
                   [
                     'Data source',
-                    isNeonMode() ? 'Neon Postgres' : 'Browser storage (demo)',
+                    isLiveMode() ? 'Neon Postgres (live)' : 'Browser storage (demo)',
                   ],
                 ].map(([label, value]) => (
                   <div key={label} className="flex items-center justify-between px-5 py-2.5">
@@ -248,9 +248,9 @@ export default function CompanyPage() {
             <CardHeader title="Data source" icon={Database} />
             <div className="space-y-3 p-5 text-sm">
               <SegmentedControl
-                value={isNeonMode() ? 'neon' : 'mock'}
+                value={isLiveMode() ? 'api' : 'mock'}
                 options={[
-                  { value: 'neon', label: 'Neon Postgres' },
+                  { value: 'api', label: 'Neon Postgres (live)' },
                   { value: 'mock', label: 'Demo data' },
                 ]}
                 onChange={() => {}}
@@ -261,9 +261,9 @@ export default function CompanyPage() {
                 the <code className="rounded bg-ink-100 px-1">.env</code> file, then restart the dev
                 server.
               </p>
-              {isNeonMode() ? (
+              {isLiveMode() ? (
                 <Alert tone="success" icon={Check}>
-                  Live data is being read from and written to Neon Postgres.
+                  Live data is being read from and written to Neon Postgres over the server API.
                 </Alert>
               ) : (
                 <Alert tone="warning" icon={Info}>
@@ -271,7 +271,7 @@ export default function CompanyPage() {
                   devices.
                 </Alert>
               )}
-              {!isNeonMode() && (
+              {!isLiveMode() && (
                 <Button variant="secondary" className="w-full" onClick={resetDemo} loading={busy}>
                   <RotateCcw size={15} />
                   Restore demo data

@@ -1,10 +1,24 @@
-import { hashPassword, verifyPassword, randomToken } from '@/lib/crypto'
-import { isOverdue, rentalTotal, rentalBalance, startOfDay, addDays, daysBetween } from '@/lib/utils'
+/**
+ * Relative specifiers, not the `@/` alias: this module is executed inside the
+ * Vercel function by Node, which does not resolve the Vite alias.
+ *
+ * `src/lib/crypto.js` runs unmodified on Node because it is built entirely on
+ * WebCrypto and `btoa`/`atob`, all of which are globals there. Reusing it keeps
+ * the stored PBKDF2 hashes valid - the format has not changed, only the side
+ * that computes it.
+ */
+import { hashPassword, verifyPassword, randomToken } from '../../lib/crypto.js'
+import { isOverdue, rentalTotal, rentalBalance, startOfDay, addDays, daysBetween } from '../../lib/utils.js'
 
 /**
  * Neon (PostgreSQL) data source.
  *
- * Activated by `VITE_DATA_SOURCE=neon` plus `VITE_NEON_DATABASE_URL`.
+ * This module is SERVER ONLY. It is loaded by `api/data.js` inside the Vercel
+ * function, never by the browser bundle: the connection string it is given is
+ * read from a non-`VITE_` environment variable and must not be shipped to
+ * clients. `VITE_DATA_SOURCE=api` makes the browser proxy these methods over
+ * HTTP instead of importing this file.
+ *
  * Every statement goes through `sql.query()` with bound parameters, so user
  * input is never concatenated into SQL text. The method contract is identical
  * to `src/db/mock/repo.mock.js` — the UI cannot tell them apart.
@@ -78,7 +92,7 @@ function httpUrl(connectionString) {
 export async function createNeonRepository(connectionString) {
   if (!connectionString) {
     throw new Error(
-      'VITE_NEON_DATABASE_URL is not set. Copy .env.example to .env and paste your Neon connection string.',
+      'No database connection string was supplied to the repository. Set DATABASE_URL in the Vercel project environment variables.',
     )
   }
   const { neon } = await import('@neondatabase/serverless')

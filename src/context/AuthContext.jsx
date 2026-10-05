@@ -1,24 +1,44 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { getRepository, SESSION_SECRET } from '@/db'
+import { getRepository } from '@/db'
+import * as authApi from '@/db/remote/auth.api'
 import { signToken, verifyToken } from '@/lib/crypto'
 
-const SESSION_KEY = 'carrental.session'
+/**
+ * Auth state.
+ *
+ * In live mode (`VITE_DATA_SOURCE=api`) there is deliberately no token in this
+ * module: the session is an `httpOnly` cookie that the server reads, verifies,
+ * and re-checks against the users table on every request. Nothing to steal from
+ * `localStorage`, nothing to forge, and no signing key in the bundle.
+ *
+ * Demo mode has no server to hold a cookie, so it keeps the original local
+ * token purely to preserve the offline experience. That path stores only
+ * browser-local mock data and is never used in production.
+ */
 
 const AuthContext = createContext(null)
+const SESSION_KEY = 'carrental.session'
+const MOCK_SECRET = 'demo-only-insecure-session-secret'
 
-async function restoreSession() {
+const isApi = () => import.meta.env.VITE_DATA_SOURCE === 'api'
+
+function readMockSession() {
   const raw = sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY)
-  if (!raw) return null
-  const payload = await verifyToken(raw, SESSION_SECRET)
-  if (!payload) {
-    sessionStorage.removeItem(SESSION_KEY)
-    localStorage.removeItem(SESSION_KEY)
-    return null
-  }
+  return raw ? verifyToken(raw, MOCK_SECRET) : Promise.resolve(null)
+}
+
+function clearMockSession() {
+  sessionStorage.removeItem(SESSION_KEY)
+  localStorage.removeItem(SESSION_KEY)
+}
+
+async function accountFromMockToken() {
+  const payload = await readMockSession()
+  if (!payload) return null
   const repo = await getRepository()
   const account = await repo.auth.findUserById(payload.userId)
   if (!account || account.user.status !== 'active') return null
-  return { ...account, token: raw }
+  return { ...account, token: payload }
 }
 
 export function AuthProvider({ children }) {
@@ -29,13 +49,14 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let cancelled = false
-    restoreSession()
-      .then((session) => {
-        if (cancelled) return
-        if (session) {
-          setUser(session.user)
-          setCompany(session.company)
-        }
+
+    const restore = isApi() ? authApi.restore() : accountFromMockToken()
+
+    restore
+      .then((account) => {
+        if (cancelled || !account) return
+        setUser(account.user)
+        setCompany(account.company)
       })
       .catch((cause) => {
         if (!cancelled) setError(cause.message)
@@ -43,44 +64,42 @@ export function AuthProvider({ children }) {
       .finally(() => {
         if (!cancelled) setReady(true)
       })
+
     return () => {
       cancelled = true
     }
   }, [])
 
-  const persist = useCallback(async (account) => {
-    const token = await signToken(
-      { userId: account.user.id, companyId: account.company.id, role: account.user.role },
-      SESSION_SECRET,
-    )
-    sessionStorage.setItem(SESSION_KEY, token)
-    localStorage.setItem(SESSION_KEY, token)
-    return token
+  const signIn = useCallback(async (credentials) => {
+    const account = isApi()
+      ? await authApi.signIn(credentials.email, credentials.password)
+      : await getRepository().then(async (repo) => {
+          const found = await repo.auth.signIn(credentials)
+          const token = await signToken(
+            { userId: found.user.id, companyId: found.company.id, role: found.user.role },
+            MOCK_SECRET,
+          )
+          sessionStorage.setItem(SESSION_KEY, token)
+          localStorage.setItem(SESSION_KEY, token)
+          return found
+        })
+    setUser(account.user)
+    setCompany(account.company)
+    return account.user
   }, [])
 
-  const signIn = useCallback(
-    async (credentials) => {
-      const repo = await getRepository()
-      const account = await repo.auth.signIn(credentials)
-      await persist(account)
-      setUser(account.user)
-      setCompany(account.company)
-      return account.user
-    },
-    [persist],
-  )
-
-  const signOut = useCallback(() => {
-    sessionStorage.removeItem(SESSION_KEY)
-    localStorage.removeItem(SESSION_KEY)
+  const signOut = useCallback(async () => {
+    if (isApi()) await authApi.signOut().catch(() => {})
+    else clearMockSession()
     setUser(null)
     setCompany(null)
   }, [])
 
   const refresh = useCallback(async () => {
     if (!user) return null
-    const repo = await getRepository()
-    const account = await repo.auth.findUserById(user.id)
+    const account = isApi()
+      ? await authApi.restore()
+      : await getRepository().then((repo) => repo.auth.findUserById(user.id))
     if (account) {
       setUser(account.user)
       setCompany(account.company)

@@ -1,31 +1,35 @@
-import { createMockRepository } from './mock/repo.mock'
-
 /**
  * Data source entry point.
  *
  * The rest of the app only ever talks to this repository object, so swapping
  * the storage engine never requires UI changes:
  *
- *   VITE_DATA_SOURCE=mock  -> localStorage (default, works with no database)
- *   VITE_DATA_SOURCE=neon  -> Neon Postgres over the serverless HTTP driver
+ *   VITE_DATA_SOURCE=mock -> localStorage, works with no database (default)
+ *   VITE_DATA_SOURCE=api  -> Neon Postgres through the Vercel functions in /api
  *
- * To connect Neon later:
- *   1. Create a Neon project and run `src/db/schema.sql` in its SQL Editor.
- *   2. Copy `.env.example` to `.env`.
- *   3. Set VITE_NEON_DATABASE_URL and VITE_DATA_SOURCE=neon, restart `npm run dev`.
+ * `api` is the only supported production mode. The older `neon` value talked to
+ * Neon straight from the browser, which meant the `VITE_`-prefixed connection
+ * string was compiled into a public JS bundle along with the session-signing
+ * key. That mode has been removed rather than left available by accident.
  */
 
 const DATA_SOURCE = import.meta.env.VITE_DATA_SOURCE || 'mock'
-export const SESSION_SECRET =
-  import.meta.env.VITE_SESSION_SECRET || 'dev-only-insecure-session-secret'
 
 let repositoryPromise = null
 
 async function createRepository() {
-  if (DATA_SOURCE === 'neon') {
-    const { createNeonRepository } = await import('./neon/repo.neon')
-    return createNeonRepository(import.meta.env.VITE_NEON_DATABASE_URL)
+  if (DATA_SOURCE === 'api') {
+    const { createApiRepository } = await import('./remote/repo.api')
+    return createApiRepository()
   }
+  if (DATA_SOURCE === 'neon') {
+    throw new Error(
+      'VITE_DATA_SOURCE=neon is no longer supported because it exposed the database credentials in the browser bundle. Set VITE_DATA_SOURCE=api and configure DATABASE_URL on the server.',
+    )
+  }
+  // Imported lazily so the demo dataset, including its well-known credentials,
+  // is absent from the production bundle when the live database is in use.
+  const { createMockRepository } = await import('./mock/repo.mock')
   return createMockRepository()
 }
 
@@ -39,8 +43,9 @@ export function getRepository() {
   return repositoryPromise
 }
 
-export function isNeonMode() {
-  return DATA_SOURCE === 'neon'
+/** True when reads and writes go to the live database. */
+export function isLiveMode() {
+  return DATA_SOURCE === 'api'
 }
 
 export const dataSource = DATA_SOURCE
