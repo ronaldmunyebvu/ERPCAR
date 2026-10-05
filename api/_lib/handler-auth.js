@@ -1,6 +1,6 @@
-import { createNeonRepository } from '../src/db/neon/repo.neon.js'
-import { connectionString, query } from './_lib/db.js'
-import { currentSession, issueSession } from './_lib/auth.js'
+import { createNeonRepository } from '../../src/db/neon/repo.neon.js'
+import { connectionString, query } from './db.js'
+import { currentSession, issueSession } from './auth.js'
 import {
   SESSION_COOKIE,
   clearSessionCookie,
@@ -9,8 +9,8 @@ import {
   parseCookies,
   readBody,
   sessionCookie,
-} from './_lib/http.js'
-import { ApiError, runGuard } from './_lib/scope.js'
+} from './http.js'
+import { ApiError, runGuard } from './scope.js'
 
 /**
  * Authentication endpoint.

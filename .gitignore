@@ -8,4 +8,4 @@ dist-ssr
 .DS_Store
 npm-debug.log*
 yarn-error.log*
-*.zip
+*.zippublic/version.json

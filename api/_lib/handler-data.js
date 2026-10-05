@@ -1,9 +1,9 @@
-import { createNeonRepository } from '../src/db/neon/repo.neon.js'
-import { OPERATIONS } from '../src/db/operations.js'
-import { connectionString, query } from './_lib/db.js'
-import { currentSession } from './_lib/auth.js'
-import { SESSION_COOKIE, fail, json, parseCookies, readBody } from './_lib/http.js'
-import { ApiError, resolveCall, sanitizeArgs } from './_lib/scope.js'
+import { createNeonRepository } from '../../src/db/neon/repo.neon.js'
+import { OPERATIONS } from '../../src/db/operations.js'
+import { connectionString, query } from './db.js'
+import { currentSession } from './auth.js'
+import { SESSION_COOKIE, fail, json, parseCookies, readBody } from './http.js'
+import { ApiError, resolveCall, sanitizeArgs } from './scope.js'
 
 /**
  * The single data endpoint.

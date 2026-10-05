@@ -57,9 +57,18 @@ function httpUrl(value) {
  * statement is given a deadline. A hung query then raises an error we can
  * report, rather than stalling until Vercel kills the invocation at 30s.
  */
-const POOL_SIZE = 2
-const CONNECT_TIMEOUT_MS = 8_000
-const STATEMENT_TIMEOUT_MS = 15_000
+const POOL_SIZE = 4
+/**
+ * The TLS handshake to Neon has been measured at anywhere between 2.7s and 13s,
+ * depending on the network path and how cold the pooler is. A timeout shorter
+ * than that does not fail fast, it fails *wrongly*: a request is abandoned while
+ * its connection is still being established, so the work is discarded and the
+ * caller sees an error rather than a slow success. This is deliberately set well
+ * above the handshake rather than to a round-looking number.
+ */
+const CONNECT_TIMEOUT_MS = 60_000
+/** Comfortably above the handshake, so a first query is never cut off. */
+const STATEMENT_TIMEOUT_MS = 30_000
 
 let pool = null
 
@@ -69,12 +78,20 @@ function client() {
       connectionString: httpUrl(connectionString()),
       max: POOL_SIZE,
       connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-      idleTimeoutMillis: 10_000,
+      // Held open rather than dropped quickly. Re-opening costs a full handshake
+      // of several seconds, so a short idle timeout makes every request after a
+      // quiet period pay that cost again.
+      idleTimeoutMillis: 300_000,
       // `sslmode=require` is Neon's default and is treated as `verify-full`,
       // which fails outright when the certificate does not match. That is the
       // behaviour we want, but it produces a deprecation warning on every
       // cold start, so the stricter spelling is made explicit.
       ssl: { sslmode: 'verify-full' },
+      // Probing idle sockets stops the network path from dropping them behind
+      // pg's back. Without this the pool spends its life reconnecting, which is
+      // what turns a fast query into a request that appears to hang.
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000,
       allowExitOnIdle: true,
     })
     // A pool-level error (server closed the socket, network blip) must not
@@ -82,6 +99,31 @@ function client() {
     pool.on('error', (error) => console.error('[api/db] pool error', error.message))
   }
   return pool
+}
+
+/**
+ * Opens the pool's connections ahead of the first request.
+ *
+ * A cold pool means the first request pays the full TLS handshake and looks
+ * broken even though the queries themselves are quick. Warming is deliberately
+ * not awaited by the caller: a function that blocked on it would spend its
+ * entire budget before handling anything.
+ */
+export async function warmPool() {
+  const pool = client()
+  const attempts = Array.from({ length: POOL_SIZE }, async () => {
+    try {
+      const connection = await pool.connect()
+      connection.release()
+      return true
+    } catch {
+      // A pool that cannot be fully warmed still serves traffic on the
+      // connections it does have.
+      return false
+    }
+  })
+  const ready = (await Promise.all(attempts)).filter(Boolean).length
+  if (ready) console.log(`[api/db] pool warmed: ${ready}/${POOL_SIZE}`)
 }
 
 export async function query(text, params = []) {

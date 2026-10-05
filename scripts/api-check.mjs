@@ -5,8 +5,8 @@
  *
  *   node --env-file=.env scripts/api-check.mjs
  */
-import authHandler from '../api/auth.js'
-import dataHandler from '../api/data.js'
+import authHandler from '../api/_lib/handler-auth.js'
+import dataHandler from '../api/_lib/handler-data.js'
 import { query, one } from '../api/_lib/db.js'
 import { OPERATIONS } from '../src/db/operations.js'
 
