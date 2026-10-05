@@ -19,16 +19,29 @@
  * Notes on running as a function rather than a server:
  *  - there is no listen() and no port; Vercel owns the socket
  *  - the filesystem is read-only apart from /tmp, so nothing is written to disk
- *  - cold starts are common, so the pool is warmed in the background rather than
- *    awaited. The TLS handshake to Neon has been measured at several seconds, and
- *    blocking the first request on it would put it close to the timeout.
+ *  - the database pool is warmed lazily on the first query rather than at module
+ *    load. Warming on load made even the health check depend on the database
+ *    being reachable, so a request that touches no data still waited on a
+ *    connection it did not need.
  */
 import { warmPool } from './_lib/db.js'
 import authHandler from './_lib/handler-auth.js'
 import dataHandler from './_lib/handler-data.js'
 import healthHandler from './_lib/handler-health.js'
 
-warmPool().catch(() => {})
+let warmed = false
+
+/**
+ * Opens the pool in the background, at most once per instance.
+ *
+ * Deliberately not awaited: the TLS handshake to Neon takes several seconds, and
+ * blocking on it would spend the request's whole budget before doing any work.
+ */
+function warmOnce() {
+  if (warmed) return
+  warmed = true
+  warmPool().catch(() => {})
+}
 
 const ROUTES = new Map([
   ['/api/auth', authHandler],
@@ -47,6 +60,11 @@ export default async function handler(event) {
       body: JSON.stringify({ error: 'Unknown endpoint.' }),
     }
   }
+
+  // The pool is warmed on first use, so a request that needs no data - the
+  // health check, or an unauthenticated call that is rejected outright - never
+  // waits on a database connection.
+  if (path !== '/api/health') warmOnce()
 
   return target(event)
 }
