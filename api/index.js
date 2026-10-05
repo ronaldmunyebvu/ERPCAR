@@ -29,6 +29,14 @@ import authHandler from './_lib/handler-auth.js'
 import dataHandler from './_lib/handler-data.js'
 import healthHandler from './_lib/handler-health.js'
 
+// Written to stderr because Vercel surfaces it in the function log. These three
+// markers are diagnostic: they show whether the module finished loading, whether
+// the handler was reached, and whether a reply left. A timeout with no marker at
+// all means the function body never ran, which is a platform-side failure rather
+// than anything this code can influence.
+console.error('[api] module loaded')
+process.on('exit', () => console.error('[api] process exiting'))
+
 let warmed = false
 
 /**
@@ -51,6 +59,7 @@ const ROUTES = new Map([
 
 export default async function handler(event) {
   const path = (event.path || event.rawPath || '').split('?')[0]
+  console.error(`[api] handler invoked for ${path}`)
   const target = ROUTES.get(path)
 
   if (!target) {
