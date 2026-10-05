@@ -462,7 +462,7 @@ function MemberModal({ open, member, busy, onClose, onSubmit }) {
                 type="text"
                 value={password}
                 onChange={set('password')}
-                placeholder="e.g. Member@123"
+                placeholder="e.g. Temp@2026"
                 className="font-mono"
                 invalid={Boolean(errors.password)}
               />
@@ -526,7 +526,7 @@ function ResetPasswordModal({ member, busy, onClose, onSubmit }) {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               className="font-mono"
-              placeholder="Member@123"
+              placeholder="Temp@2026"
             />
             <Button
               variant="secondary"

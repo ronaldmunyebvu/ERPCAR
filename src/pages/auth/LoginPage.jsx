@@ -2,14 +2,9 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Car, Eye, EyeOff, Info } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
-import { getRepository, dataSource } from '@/db'
+import { getRepository } from '@/db'
 import { Button, Field, Input, Alert, Spinner, Card } from '@/components/ui'
-import { cn } from '@/lib/utils'
 
-const DEMO_ACCOUNTS = [
-  { role: 'Owner / Admin', email: 'admin@falconcarhire.test', password: 'Admin@123' },
-  { role: 'Staff Member', email: 'rudo@falconcarhire.test', password: 'Member@123' },
-]
 
 export default function LoginPage() {
   const { signIn } = useAuth()
@@ -46,19 +41,6 @@ export default function LoginPage() {
     setBusy(true)
     try {
       await signIn(form)
-      navigate('/app', { replace: true })
-    } catch (cause) {
-      setError(cause.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const signInAs = async (account) => {
-    setError(null)
-    setBusy(true)
-    try {
-      await signIn({ email: account.email, password: account.password })
       navigate('/app', { replace: true })
     } catch (cause) {
       setError(cause.message)
@@ -189,40 +171,6 @@ export default function LoginPage() {
               Start your rental business
             </Button>
           </div>
-
-          {dataSource === 'mock' && (
-            <Card className="mt-8 p-4">
-              <p className="flex items-center gap-2 text-sm font-semibold text-ink-800">
-                <Info size={15} className="text-brand-500" />
-                Demo accounts
-              </p>
-              <p className="mt-1 text-xs text-ink-500">
-                Open the preloaded sample fleet, rentals and reports with a demo account.
-              </p>
-              <div className="mt-3 space-y-2">
-                {DEMO_ACCOUNTS.map((account) => (
-                  <button
-                    key={account.email}
-                    type="button"
-                    onClick={() => signInAs(account)}
-                    disabled={busy}
-                    className={cn(
-                      'flex w-full items-center justify-between gap-3 rounded-lg border border-ink-200',
-                      'px-3 py-2 text-left transition hover:border-brand-300 hover:bg-brand-50',
-                    )}
-                  >
-                    <span>
-                      <span className="block text-xs font-semibold text-ink-800">{account.role}</span>
-                      <span className="block text-[11px] text-ink-500">{account.email}</span>
-                    </span>
-                    <span className="shrink-0 rounded bg-ink-100 px-2 py-1 font-mono text-[10px] text-ink-600">
-                      {account.password}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </Card>
-          )}
         </div>
       </div>
     </div>
