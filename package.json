@@ -18,7 +18,9 @@
     "db:schema": "node scripts/neon-setup.mjs --schema-only",
     "db:check": "node scripts/neon-check.mjs",
     "api:check": "node --env-file=.env scripts/api-check.mjs",
-    "db:cleanup": "node --env-file=.env scripts/db-cleanup.mjs"
+    "db:cleanup": "node --env-file=.env scripts/db-cleanup.mjs",
+    "api:http": "node --env-file=.env scripts/http-check.mjs",
+    "verify": "npm run api:check && npm run api:http && npm run lint && npm run build"
   },
   "dependencies": {
     "lucide-react": "^0.511.0",

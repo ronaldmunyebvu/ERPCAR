@@ -32,12 +32,28 @@ function repository() {
   return repositoryPromise
 }
 
+/**
+ * Messages the repository raises for ordinary user mistakes, such as a wrong
+ * password or an unknown address. These are the caller's fault, not the
+ * server's, so they are returned verbatim and paired with a 4xx status. Anything
+ * not on this list is treated as a genuine fault: it is logged server-side and
+ * replaced with a generic message, so an unexpected error can never leak a
+ * query, a hostname or a column name to the browser.
+ */
+const USER_FAULT = /not found|incorrect|deactivated|password|email|account|already|json|admin|taken|invalid|expired/i
+
 function safeMessage(error) {
   if (error instanceof ApiError) return error.message
   const text = String(error?.message || '')
-  if (/not found|incorrect|deactivated|password|email|account|already|json|admin/i.test(text)) return text
+  if (USER_FAULT.test(text)) return text
   console.error('[api/auth]', error)
   return 'The request could not be completed.'
+}
+
+/** 4xx for a caller mistake, 500 for a fault on our side. */
+function statusFor(error) {
+  if (error instanceof ApiError) return error.statusCode
+  return USER_FAULT.test(String(error?.message || '')) ? 400 : 500
 }
 
 /** Strips anything that must never cross the wire. */
@@ -128,7 +144,6 @@ export default async function handler(event) {
 
     return json({ ...body, signedIn: Boolean(body.account) }, 200, headers)
   } catch (error) {
-    const status = error instanceof ApiError ? error.statusCode : 500
-    return fail(safeMessage(error), status)
+    return fail(safeMessage(error), statusFor(error))
   }
 }
