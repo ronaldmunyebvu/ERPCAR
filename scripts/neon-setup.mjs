@@ -19,26 +19,32 @@ const URL_ENCODINGS = {
  * The browser HTTP driver wants a bare `host/db` target. Copy the connection
  * string into a separate Neon connection and point this at it.
  */
-const OVERRIDE_ENV = {
-  NEON_DATABASE_URL: 'NEON_DATABASE_URL',
-  VITE_NEON_DATABASE_URL: 'VITE_NEON_DATABASE_URL',
-}
+const CONNECTION_ENV = [
+  'DATABASE_URL',
+  'NEON_DATABASE_URL',
+  'POSTGRES_URL',
+  'PGDATABASE_URL',
+  'VITE_NEON_DATABASE_URL',
+]
 
 const force = process.argv.includes('--force')
-const skipSeed = process.argv.includes('--schema-only')
+const skipSeed = process.argv.includes('--schema-only') || !process.argv.includes('--seed-demo')
 
 function readConnectionString() {
-  const overrideKey = Object.keys(OVERRIDE_ENV).find((key) => process.env[key])
-  if (overrideKey) return process.env[overrideKey]
+  for (const key of CONNECTION_ENV) {
+    if (process.env[key]) return process.env[key]
+  }
 
   try {
     const dotenv = readFileSync(resolve(ROOT, '.env'), 'utf8')
-    const match = dotenv.match(/^\s*VITE_NEON_DATABASE_URL\s*=\s*(.+)\s*$/m)
-    if (match) return match[1].replace(/^["']|["']$/g, '')
+    for (const key of CONNECTION_ENV) {
+      const match = dotenv.match(new RegExp(`^\\s*${key}\\s*=\\s*(.+)\\s*$`, 'm'))
+      if (match) return match[1].replace(/^["']|["']$/g, '')
+    }
   } catch {
     /* .env missing */
   }
-  throw new Error('No connection string found. Set NEON_DATABASE_URL or fill in .env')
+  throw new Error(`No connection string found. Set ${CONNECTION_ENV.slice(0, -1).join(', ')} or fill in .env`)
 }
 
 function normalise(url) {

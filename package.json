@@ -14,7 +14,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "db:setup": "node scripts/neon-setup.mjs",
-    "db:setup:force": "node scripts/neon-setup.mjs --force",
+    "db:setup:force": "node scripts/neon-setup.mjs --force --seed-demo",
+    "db:seed-demo": "node scripts/neon-setup.mjs --seed-demo",
     "db:schema": "node scripts/neon-setup.mjs --schema-only",
     "db:check": "node scripts/neon-check.mjs",
     "api:check": "node --env-file=.env scripts/api-check.mjs",
@@ -23,6 +24,7 @@
     "verify": "npm run api:check && npm run api:http && npm run lint && npm run build"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.2.0",
     "lucide-react": "^0.511.0",
     "pg": "^8.16.3",
     "react": "^19.1.0",

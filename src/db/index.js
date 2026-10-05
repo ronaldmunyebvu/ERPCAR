@@ -4,7 +4,7 @@
  * The rest of the app only ever talks to this repository object, so swapping
  * the storage engine never requires UI changes:
  *
- *   VITE_DATA_SOURCE=mock -> localStorage, works with no database (default)
+ *   VITE_DATA_SOURCE=mock -> localStorage for local development
  *   VITE_DATA_SOURCE=api  -> Neon Postgres through the Vercel functions in /api
  *
  * `api` is the only supported production mode. The older `neon` value talked to
@@ -13,7 +13,11 @@
  * key. That mode has been removed rather than left available by accident.
  */
 
-const DATA_SOURCE = import.meta.env.VITE_DATA_SOURCE || 'mock'
+// Never let a production deployment silently fall back to browser-only storage.
+// Local development keeps the mock as a convenient default.
+const DATA_SOURCE = import.meta.env.PROD
+  ? 'api'
+  : import.meta.env.VITE_DATA_SOURCE || 'mock'
 
 let repositoryPromise = null
 

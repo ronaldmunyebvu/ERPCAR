@@ -3,9 +3,9 @@
  *
  * The other checks import the handlers and call them directly, which cannot
  * catch a request that never reaches the function or a body that never gets
- * parsed. This mounts the real single entry point on a Node HTTP server,
- * translates between Node's req/res and Vercel's event/return shape, and drives
- * it with fetch: cookies, JSON bodies, status codes and headers included.
+ * parsed. This mounts the real single entry point on a Node HTTP server and
+ * drives its Vercel req/res contract with fetch: cookies, JSON bodies, status
+ * codes and headers included.
  *
  * Requests go to `/api/<endpoint>` because that is the URL the browser uses;
  * `api/index.js` is what Vercel actually invokes, so this exercises the
@@ -16,26 +16,7 @@ import { createServer } from 'node:http'
 const entry = (await import('../api/index.js')).default
 
 const server = createServer(async (req, res) => {
-  const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
-
-  const url = new URL(req.url, 'http://localhost')
-  const event = {
-    httpMethod: req.method,
-    headers: req.headers,
-    body: chunks.length ? Buffer.concat(chunks).toString('utf8') : null,
-    path: url.pathname,
-    query: Object.fromEntries(url.searchParams),
-  }
-
-  try {
-    const result = await entry(event)
-    res.writeHead(result.statusCode, { ...result.headers })
-    res.end(result.body ?? '')
-  } catch (error) {
-    res.writeHead(500, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ error: error.message }))
-  }
+  await entry(req, res)
 })
 
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))

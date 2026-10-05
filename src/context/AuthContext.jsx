@@ -1,15 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { getRepository } from '@/db'
+import { getRepository, isLiveMode } from '@/db'
 import * as authApi from '@/db/remote/auth.api'
 import { signToken, verifyToken } from '@/lib/crypto'
 
 /**
  * Auth state.
  *
- * In live mode (`VITE_DATA_SOURCE=api`) there is deliberately no token in this
- * module: the session is an `httpOnly` cookie that the server reads, verifies,
- * and re-checks against the users table on every request. Nothing to steal from
- * `localStorage`, nothing to forge, and no signing key in the bundle.
+ * In live mode (always enabled for production builds) there is deliberately no
+ * token in this module: the session is an `httpOnly` cookie that the server
+ * reads, verifies, and re-checks against the users table on every request.
+ * Nothing to steal from `localStorage`, nothing to forge, and no signing key in
+ * the bundle.
  *
  * Demo mode has no server to hold a cookie, so it keeps the original local
  * token purely to preserve the offline experience. That path stores only
@@ -19,8 +20,6 @@ import { signToken, verifyToken } from '@/lib/crypto'
 const AuthContext = createContext(null)
 const SESSION_KEY = 'carrental.session'
 const MOCK_SECRET = 'demo-only-insecure-session-secret'
-
-const isApi = () => import.meta.env.VITE_DATA_SOURCE === 'api'
 
 function readMockSession() {
   const raw = sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY)
@@ -50,7 +49,7 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let cancelled = false
 
-    const restore = isApi() ? authApi.restore() : accountFromMockToken()
+    const restore = isLiveMode() ? authApi.restore() : accountFromMockToken()
 
     restore
       .then((account) => {
@@ -71,7 +70,7 @@ export function AuthProvider({ children }) {
   }, [])
 
   const signIn = useCallback(async (credentials) => {
-    const account = isApi()
+    const account = isLiveMode()
       ? await authApi.signIn(credentials.email, credentials.password)
       : await getRepository().then(async (repo) => {
           const found = await repo.auth.signIn(credentials)
@@ -89,7 +88,7 @@ export function AuthProvider({ children }) {
   }, [])
 
   const signOut = useCallback(async () => {
-    if (isApi()) await authApi.signOut().catch(() => {})
+    if (isLiveMode()) await authApi.signOut().catch(() => {})
     else clearMockSession()
     setUser(null)
     setCompany(null)
@@ -97,7 +96,7 @@ export function AuthProvider({ children }) {
 
   const refresh = useCallback(async () => {
     if (!user) return null
-    const account = isApi()
+    const account = isLiveMode()
       ? await authApi.restore()
       : await getRepository().then((repo) => repo.auth.findUserById(user.id))
     if (account) {

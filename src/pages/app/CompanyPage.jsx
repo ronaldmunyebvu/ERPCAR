@@ -13,7 +13,6 @@ import {
   Checkbox,
   Field,
   Input,
-  SegmentedControl,
   Select,
   Spinner,
   Textarea,
@@ -247,29 +246,20 @@ export default function CompanyPage() {
           <Card>
             <CardHeader title="Data source" icon={Database} />
             <div className="space-y-3 p-5 text-sm">
-              <SegmentedControl
-                value={isLiveMode() ? 'api' : 'mock'}
-                options={[
-                  { value: 'api', label: 'Neon Postgres (live)' },
-                  { value: 'mock', label: 'Demo data' },
-                ]}
-                onChange={() => {}}
-                className="w-full"
-              />
-              <p className="text-xs leading-relaxed text-ink-500">
-                Controlled by <code className="rounded bg-ink-100 px-1">VITE_DATA_SOURCE</code> in
-                the <code className="rounded bg-ink-100 px-1">.env</code> file, then restart the dev
-                server.
-              </p>
               {isLiveMode() ? (
                 <Alert tone="success" icon={Check}>
                   Live data is being read from and written to Neon Postgres over the server API.
                 </Alert>
               ) : (
-                <Alert tone="warning" icon={Info}>
-                  Demo mode stores everything in this browser only. Nothing is shared between
-                  devices.
-                </Alert>
+                <>
+                  <p className="text-xs leading-relaxed text-ink-500">
+                    Local development only. Configure <code>VITE_DATA_SOURCE=api</code> to use
+                    Neon through the server API.
+                  </p>
+                  <Alert tone="warning" icon={Info}>
+                    Browser-only development data is not shared between devices.
+                  </Alert>
+                </>
               )}
               {!isLiveMode() && (
                 <Button variant="secondary" className="w-full" onClick={resetDemo} loading={busy}>

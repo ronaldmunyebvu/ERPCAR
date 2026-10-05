@@ -12,9 +12,9 @@
  *    after the module graph has loaded once, rather than each function loading
  *    its own copy of it per cold start.
  *
- * The handlers keep their existing shape (a Vercel event in, a
- * `{ statusCode, headers, body }` object out) so they stay testable without a
- * server; only the routing between them is new.
+ * The internal handlers keep their testable event-in/response-object-out
+ * shape. This entry point adapts Vercel's Node req/res contract to that shape
+ * and writes the response back to the runtime.
  *
  * Notes on running as a function rather than a server:
  *  - there is no listen() and no port; Vercel owns the socket
@@ -57,7 +57,7 @@ const ROUTES = new Map([
   ['/api/health', healthHandler],
 ])
 
-export default async function handler(event) {
+async function dispatch(event) {
   const path = (event.path || event.rawPath || '').split('?')[0]
   console.error(`[api] handler invoked for ${path}`)
   const target = ROUTES.get(path)
@@ -76,4 +76,55 @@ export default async function handler(event) {
   if (path !== '/api/health') warmOnce()
 
   return target(event)
+}
+
+async function requestBody(request) {
+  if (request.body !== undefined && request.body !== null) {
+    return typeof request.body === 'string' ? request.body : JSON.stringify(request.body)
+  }
+
+  const chunks = []
+  for await (const chunk of request) chunks.push(Buffer.from(chunk))
+  return chunks.length ? Buffer.concat(chunks).toString('utf8') : null
+}
+
+async function toEvent(request) {
+  const headers = request.headers || {}
+  const host = headers.host || 'localhost'
+  const url = new URL(request.url || '/', `http://${host}`)
+
+  return {
+    httpMethod: request.method || 'GET',
+    headers,
+    body: await requestBody(request),
+    path: url.pathname,
+    query: Object.fromEntries(url.searchParams),
+  }
+}
+
+function writeResponse(response, result) {
+  for (const [name, value] of Object.entries(result.headers || {})) {
+    response.setHeader(name, value)
+  }
+  response.statusCode = result.statusCode || 200
+  response.end(result.body ?? '')
+}
+
+export default async function handler(request, response) {
+  // Preserve direct event invocation for the focused handler tests.
+  if (!response) return dispatch(request)
+
+  try {
+    writeResponse(response, await dispatch(await toEvent(request)))
+  } catch (error) {
+    console.error('[api] unhandled request error', error)
+    if (response.headersSent) {
+      response.destroy(error)
+      return
+    }
+    response.statusCode = 500
+    response.setHeader('content-type', 'application/json; charset=utf-8')
+    response.setHeader('cache-control', 'no-store')
+    response.end(JSON.stringify({ error: 'The request could not be completed.' }))
+  }
 }

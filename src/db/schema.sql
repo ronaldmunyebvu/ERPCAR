@@ -1,7 +1,7 @@
 -- ===========================================================================
 -- Car Rental Management System — Neon (PostgreSQL) schema
 -- Run this once in the Neon SQL Editor (or via `psql`) before pointing the
--- app at Neon: set VITE_DATA_SOURCE=neon and VITE_NEON_DATABASE_URL.
+-- app at Neon: set DATABASE_URL on the server. Production builds use the API.
 -- Every table is scoped by company_id for multi-tenant support.
 -- ===========================================================================
 
