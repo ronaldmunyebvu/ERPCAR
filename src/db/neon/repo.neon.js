@@ -74,35 +74,30 @@ function filters() {
 }
 
 /**
- * The pooled URL that Neon hands out includes `channel_binding=require`, which
- * only applies to direct (TLS) connections. The serverless HTTP driver always
- * talks to the pooler over plain HTTPS, so the parameter is dropped and the
- * URL is left otherwise untouched.
+ * @param {string} connectionString - the pooled Postgres URL
+ * @param {{ query(text: string, params?: unknown[]): Promise<unknown> }} sql -
+ *   the executor to run statements through, normally supplied by `api/_lib/db.js`
  */
-function httpUrl(connectionString) {
-  try {
-    const parsed = new URL(connectionString)
-    parsed.searchParams.delete('channel_binding')
-    return parsed.toString()
-  } catch {
-    return connectionString
-  }
-}
-
-export async function createNeonRepository(connectionString) {
+export async function createNeonRepository(connectionString, sql) {
   if (!connectionString) {
     throw new Error(
       'No database connection string was supplied to the repository. Set DATABASE_URL in the Vercel project environment variables.',
     )
   }
-  const { neon } = await import('@neondatabase/serverless')
-  const sql = neon(httpUrl(connectionString))
+  // The `sql` executor is injected by the caller rather than constructed here.
+  // Both drivers in use are WebSocket-based and stall on Vercel's runtime, so
+  // the API layer passes in a plain TLS executor built on `pg` instead. This
+  // keeps the repository free of any driver dependency, and means this file
+  // runs unchanged on Node, in tests, and on any other host.
+  if (!sql || typeof sql.query !== 'function') {
+    throw new Error('createNeonRepository requires a `sql` executor with a query() method.')
+  }
 
   async function rows(text, params = []) {
     const result = await sql.query(text, params)
-    // `@neondatabase/serverless` resolves `sql.query()` straight to the row
-    // array. Older/other builds wrap it in a `{ rows }` envelope, so both are
-    // accepted here.
+    // `pg` resolves to a `{ rows }` envelope, while the serverless driver
+    // resolves straight to the row array. Both are accepted so either
+    // executor can be supplied.
     if (Array.isArray(result)) return result
     return result?.rows ?? []
   }

@@ -1,4 +1,4 @@
-import { neon } from '@neondatabase/serverless'
+import pg from 'pg'
 
 /**
  * Server-only Postgres access.
@@ -7,6 +7,14 @@ import { neon } from '@neondatabase/serverless'
  * it is never referenced by client code and never appears in a browser bundle.
  * Everything under `api/` is deployed as a serverless function; only variables
  * without the `VITE_` prefix are visible here.
+ *
+ * Driver note: this uses `pg` rather than `@neondatabase/serverless`. The
+ * serverless package's driver is WebSocket-based, and on Vercel its connection
+ * attempt never settles, so every request ran to the 30s function timeout and
+ * returned 504 - including requests that should have been rejected without
+ * touching the database. `pg` speaks plain TLS over the pooler, which is the
+ * path Neon documents for serverless deployments, and it fails fast when a
+ * connection string is wrong instead of hanging.
  */
 
 /**
@@ -34,24 +42,54 @@ function httpUrl(value) {
   try {
     const parsed = new URL(value)
     parsed.searchParams.delete('channel_binding')
+    // `require` is currently treated as `verify-full` but is scheduled to
+    // weaken, so the strict spelling is requested explicitly.
+    parsed.searchParams.set('sslmode', 'verify-full')
     return parsed.toString()
   } catch {
     return value
   }
 }
 
-let cached = null
+/**
+ * The pooler terminates idle connections, and a function instance may be
+ * frozen between invocations, so the pool is kept deliberately small and every
+ * statement is given a deadline. A hung query then raises an error we can
+ * report, rather than stalling until Vercel kills the invocation at 30s.
+ */
+const POOL_SIZE = 2
+const CONNECT_TIMEOUT_MS = 8_000
+const STATEMENT_TIMEOUT_MS = 15_000
+
+let pool = null
 
 function client() {
-  if (!cached) cached = neon(httpUrl(connectionString()))
-  return cached
+  if (!pool) {
+    pool = new pg.Pool({
+      connectionString: httpUrl(connectionString()),
+      max: POOL_SIZE,
+      connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+      idleTimeoutMillis: 10_000,
+      // `sslmode=require` is Neon's default and is treated as `verify-full`,
+      // which fails outright when the certificate does not match. That is the
+      // behaviour we want, but it produces a deprecation warning on every
+      // cold start, so the stricter spelling is made explicit.
+      ssl: { sslmode: 'verify-full' },
+      allowExitOnIdle: true,
+    })
+    // A pool-level error (server closed the socket, network blip) must not
+    // become an unhandled rejection that kills the function instance.
+    pool.on('error', (error) => console.error('[api/db] pool error', error.message))
+  }
+  return pool
 }
 
 export async function query(text, params = []) {
-  const result = await client().query(text, params)
-  // `sql.query()` resolves straight to the row array on some builds of the
-  // driver and to a `{ rows }` envelope on others, so both are accepted.
-  if (Array.isArray(result)) return result
+  const result = await client().query({
+    text,
+    values: params,
+    query_timeout: STATEMENT_TIMEOUT_MS,
+  })
   return result?.rows ?? []
 }
 

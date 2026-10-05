@@ -1,5 +1,5 @@
 import { createNeonRepository } from '../src/db/neon/repo.neon.js'
-import { connectionString } from './_lib/db.js'
+import { connectionString, query } from './_lib/db.js'
 import { currentSession, issueSession } from './_lib/auth.js'
 import {
   SESSION_COOKIE,
@@ -24,7 +24,7 @@ let repositoryPromise = null
 
 function repository() {
   if (!repositoryPromise) {
-    repositoryPromise = createNeonRepository(connectionString()).catch((error) => {
+    repositoryPromise = createNeonRepository(connectionString(), { query }).catch((error) => {
       repositoryPromise = null
       throw error
     })
