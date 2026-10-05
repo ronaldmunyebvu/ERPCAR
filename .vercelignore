@@ -3,7 +3,6 @@ dist
 dist-ssr
 build.log
 template.docx
-scripts
 .env
 .env.local
 .env.*.local

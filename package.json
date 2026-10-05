@@ -9,7 +9,8 @@
   "description": "Car Rental Management System - multi-tenant ERP for car hire companies",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/build-stamp.mjs && vite build",
+    "build:stamp": "node scripts/build-stamp.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "db:setup": "node scripts/neon-setup.mjs",
