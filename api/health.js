@@ -23,6 +23,14 @@ export default function handler() {
       node: process.version,
       loadedAt,
       now: new Date().toISOString(),
+      // Whether the required environment arrived. Reported by name only, so a
+      // secret is never echoed back in a response body.
+      env: {
+        DATABASE_URL: Boolean(process.env.DATABASE_URL),
+        JWT_SECRET: Boolean(process.env.JWT_SECRET),
+        SESSION_SECRET: Boolean(process.env.SESSION_SECRET),
+        VITE_DATA_SOURCE: process.env.VITE_DATA_SOURCE ?? null,
+      },
     }),
   }
 }

@@ -6,9 +6,16 @@
  * in the browser against a bundled secret.
  */
 
+import { sessionTtl } from './auth.js'
+
 export const SESSION_COOKIE = 'carrental.session'
 
-const BASE_SECONDS = 60 * 60 * 12
+/**
+ * Cookie lifetime follows `JWT_EXPIRES_IN` so the browser cookie and the token's
+ * own `exp` claim can never disagree. If the cookie outlived the token the
+ * session would appear to be signed in while every request was rejected.
+ */
+const BASE_SECONDS = sessionTtl()
 
 export function json(body, status = 200, headers = {}) {
   return {
