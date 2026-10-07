@@ -217,7 +217,9 @@ export function createMockRepository() {
           role: 'admin',
           status: 'active',
           avatar_url: '',
-          last_login_at: timestamp,
+          // Locked until the emailed confirmation link is opened.
+          email_verified: false,
+          last_login_at: null,
           created_at: timestamp,
           updated_at: timestamp,
         })
@@ -253,6 +255,15 @@ export function createMockRepository() {
         if (user.status !== 'active') throw new Error('This account has been deactivated. Contact your admin.')
         const ok = await verifyPassword(password, user.password_hash)
         if (!ok) throw new Error('Incorrect password. Please try again.')
+        // Checked after the password so an unconfirmed address cannot be used
+        // to probe who has an account. Rows written before this rule existed
+        // have no flag at all and are treated as confirmed.
+        if (user.email_verified === false) {
+          throw new Error(
+            `Confirm your email address before signing in — we sent a link to ${user.email}. ` +
+              'If it is gone, use "Forgot password" to verify with a code instead.',
+          )
+        }
         user.last_login_at = new Date().toISOString()
         user.updated_at = user.last_login_at
         const company = data.companies.find((item) => item.id === user.company_id)
@@ -294,6 +305,7 @@ export function createMockRepository() {
           throw new Error('This confirmation link is invalid or has expired. Please sign in instead.')
         }
         credential.used_at = new Date().toISOString()
+        user.email_verified = true
         user.last_login_at = credential.used_at
         user.updated_at = credential.used_at
         const company = data.companies.find((item) => item.id === user.company_id)
@@ -522,6 +534,9 @@ export function createMockRepository() {
 
         const user = assertFound(data.users.find((item) => item.id === reset.user_id), 'User')
         user.password_hash = await hashPassword(password)
+        // The code went to this address, so the inbox is proven as well — which
+        // is also how a lost confirmation link is recovered.
+        user.email_verified = true
         user.updated_at = new Date().toISOString()
         for (const item of live) {
           if (item.user_id === user.id && purpose(item) === 'password_reset' && !item.used_at) {

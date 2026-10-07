@@ -1,15 +1,13 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Building2, Car, Info, MailCheck, UserPlus } from 'lucide-react'
 import { getRepository } from '@/db'
-import { useAuth } from '@/context/AuthContext'
 import { Button, Field, Input, Textarea, Select, Alert, Card } from '@/components/ui'
 
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'ZAR', 'KES', 'NGN', 'GHS', 'ZMW', 'TZS', 'UGX', 'BWP', 'MWK']
 
 export default function SetupPage() {
   const navigate = useNavigate()
-  const { signIn } = useAuth()
   const [step, setStep] = useState(1)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -63,22 +61,6 @@ export default function SetupPage() {
     } catch (cause) {
       setError(cause.message)
     } finally {
-      setBusy(false)
-    }
-  }
-
-  /**
-   * The account exists at this point; the confirmation link is a nicety, not a
-   * gate, so the owner can walk straight in with the password they just chose.
-   */
-  const signInNow = async () => {
-    setError(null)
-    setBusy(true)
-    try {
-      await signIn({ email: owner.email.trim().toLowerCase(), password: owner.password })
-      navigate('/app', { replace: true })
-    } catch (cause) {
-      setError(cause.message)
       setBusy(false)
     }
   }
@@ -143,11 +125,10 @@ export default function SetupPage() {
                 <MailCheck size={21} />
               </span>
               <div>
-                <h2 className="text-lg font-semibold text-ink-900">Check your email</h2>
+                <h2 className="text-lg font-semibold text-ink-900">Confirm your email to finish</h2>
                 <p className="mt-1 text-sm text-ink-500">
-                  A confirmation link is on its way to <strong>{owner.email}</strong>. Opening it
-                  confirms your address and signs you straight in. The link works once and expires
-                  after 24 hours.
+                  A confirmation link is on its way to <strong>{owner.email}</strong>. Open it and
+                  you are signed in. The link works once and expires after 24 hours.
                 </p>
               </div>
 
@@ -169,20 +150,22 @@ export default function SetupPage() {
                   </Button>
                 </Card>
               ) : (
-                <Alert tone="info" icon={Info} title="No need to wait">
-                  Your account is already active, so you can sign in with your password whenever
-                  you like — the email is simply there to confirm the address.
+                <Alert tone="info" icon={Info} title="The account stays locked until then">
+                  Signing in with your password is refused until that link is opened, so nobody
+                  can use this address before it has been proved.
                 </Alert>
               )}
 
-              <div className="flex justify-between gap-2 pt-2">
-                <Button variant="secondary" onClick={() => navigate('/login')} disabled={busy}>
-                  Go to sign in
-                </Button>
-                <Button onClick={signInNow} loading={busy}>
-                  Sign in now
-                </Button>
-              </div>
+              <p className="text-xs text-ink-500">
+                Email never arrived?{' '}
+                <Link
+                  to="/forgot-password"
+                  className="font-medium text-brand-600 hover:text-brand-700"
+                >
+                  Verify with a one-time code instead
+                </Link>{' '}
+                — the code goes to the same inbox, activates the account and signs you in.
+              </p>
             </div>
           ) : (
           <form onSubmit={submit} className="space-y-4">

@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_key ON users (lower(email));
 
+-- A new owner cannot sign in until they open the emailed confirmation link.
+-- Everyone else (staff added by an admin, demo data) is already trusted, so
+-- the column defaults to true and company setup is the only writer of false.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT true;
+
 -- password reset tokens (short lived, single use)
 CREATE TABLE IF NOT EXISTS password_resets (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),

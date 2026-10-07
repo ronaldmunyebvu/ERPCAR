@@ -41,7 +41,7 @@ import {
 
 const PUBLIC_USER_COLUMNS = `
   id, company_id, full_name, email, phone, role, status, avatar_url,
-  last_login_at, created_at, updated_at
+  email_verified, last_login_at, created_at, updated_at
 `
 
 function num(value, fallback = 0) {
@@ -321,8 +321,8 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           ],
         )
         const user = await one(
-          `INSERT INTO users (company_id, full_name, email, phone, password_hash, role)
-           VALUES ($1,$2,$3,$4,$5,'admin') RETURNING ${PUBLIC_USER_COLUMNS}`,
+          `INSERT INTO users (company_id, full_name, email, phone, password_hash, role, email_verified)
+           VALUES ($1,$2,$3,$4,$5,'admin', false) RETURNING ${PUBLIC_USER_COLUMNS}`,
           [
             created.id,
             owner.full_name,
@@ -359,6 +359,15 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         }
         if (!(await verifyPassword(password, user.password_hash))) {
           throw new Error('Incorrect password. Please try again.')
+        }
+        // Password checked first: an unconfirmed address must not become a way
+        // to probe who has an account. The emailed link, or the reset code
+        // posted to the same inbox, is what unlocks it.
+        if (user.email_verified === false) {
+          throw new Error(
+            `Confirm your email address before signing in — we sent a link to ${user.email}. ` +
+              'If it is gone, use "Forgot password" to verify with a code instead.',
+          )
         }
         const company = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
         await rows(`UPDATE users SET last_login_at = now(), updated_at = now() WHERE id = $1`, [user.id])
@@ -404,8 +413,17 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (!user || user.status !== 'active') {
           throw new Error('This confirmation link is invalid or has expired. Please sign in instead.')
         }
-        await rows('UPDATE password_resets SET used_at = now() WHERE id = $1', [credential.id])
-        await rows('UPDATE users SET last_login_at = now(), updated_at = now() WHERE id = $1', [
+        await rows(
+          'UPDATE password_resets SET used_at = now() WHERE id = $1',
+          [credential.id],
+        )
+        await rows(
+          'UPDATE users SET email_verified = true, last_login_at = now(), updated_at = now() WHERE id = $1',
+          [user.id],
+        )
+        // Read back: the row fetched above was fetched before the update, and
+        // the caller signs in with exactly what is returned here.
+        const updated = await one(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE id = $1`, [
           user.id,
         ])
         const company = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
@@ -417,7 +435,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           entity_id: user.id,
           summary: `${user.full_name} confirmed their email address`,
         })
-        return { user, company }
+        return { user: updated ?? user, company }
       },
 
       async findUserById(id) {
@@ -646,8 +664,11 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           throw new Error('This reset code is invalid or has expired. Please request a new one.')
         }
 
+        // The code was posted to this address, so the inbox is proven as well
+        // as the password — which is also how a lost confirmation link is
+        // recovered.
         const user = await one(
-          `UPDATE users SET password_hash = $2, updated_at = now()
+          `UPDATE users SET password_hash = $2, email_verified = true, updated_at = now()
            WHERE id = $1 RETURNING ${PUBLIC_USER_COLUMNS}`,
           [reset.user_id, await hashPassword(password)],
         )

@@ -117,8 +117,15 @@ const ACTIONS = {
     }
   },
 
-  /** First-run provisioning. Refused once a company exists. */
-  async setup(repo, _session, payload, event) {
+  /**
+   * First-run provisioning. Refused once a company exists.
+   *
+   * Deliberately issues no session: the account it creates is unconfirmed, and
+   * only the emailed link (or a reset code sent to the same inbox) can lift
+   * that. The confirmation details are returned for the same reason they are
+   * on the data path — a deployment with no mail server must still be usable.
+   */
+  async setup(repo, _session, payload) {
     await runGuard('noCompaniesExist')
     const { company, owner } = payload
     if (!company?.name || !owner?.full_name || !owner?.email || !owner?.password) {
@@ -127,16 +134,11 @@ const ACTIONS = {
     if (String(owner.password).length < 8) {
       throw new ApiError('Choose a password with at least 8 characters.')
     }
-    const user = await repo.auth.createCompanyWithOwner({ company, owner })
-    const created = await repo.auth.findUserById(user.id)
-    const { token, maxAge } = issueSession({
-      userId: user.id,
-      companyId: created.company.id,
-      role: user.role,
-    })
+    const created = await repo.auth.createCompanyWithOwner({ company, owner })
     return {
-      account: publicAccount(created.user, created.company),
-      cookie: sessionCookie(event, token, maxAge),
+      account: null,
+      email_sent: created.email_sent,
+      confirmation_token: created.confirmation_token,
     }
   },
 }
