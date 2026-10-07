@@ -23,6 +23,17 @@ import pg from 'pg'
  */
 const CANDIDATE_VARS = ['DATABASE_URL', 'NEON_DATABASE_URL', 'POSTGRES_URL', 'PGDATABASE_URL']
 
+/**
+ * `date` columns (the Zinara licence window on `cars`) are kept as the
+ * `YYYY-MM-DD` text Postgres sends. The default parser turns them into a Date
+ * at midnight in *this* process's timezone, which is then serialised to UTC and
+ * can land on the previous calendar day for a client west of UTC. A licence
+ * expiry is a calendar date, not an instant, so the text is passed through.
+ */
+pg.types.setTypeParser(1082, (value) =>
+  value === null || value === undefined ? value : String(value),
+)
+
 export function connectionString() {
   for (const name of CANDIDATE_VARS) {
     const value = process.env[name]

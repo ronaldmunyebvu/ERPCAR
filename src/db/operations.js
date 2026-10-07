@@ -101,6 +101,9 @@ export const OPERATIONS = {
   },
   'cars.update': { auth: 'member', own: 'cars', actor: 2 },
   'cars.remove': { auth: 'member', own: 'cars', actor: 1 },
+  // Restarting the Zinara licence window is a write against one known vehicle,
+  // so ownership of that row and the acting user are both pinned.
+  'cars.renewLicense': { auth: 'member', own: 'cars', actor: 2 },
 
   /* ------------------------------------------------------------- customers */
   'customers.list': { auth: 'member', force: [{ index: 0, key: 'companyId', from: FROM.COMPANY }] },
@@ -160,6 +163,13 @@ export const OPERATIONS = {
   'reports.dashboard': { auth: 'member', force: [{ index: 0, key: null, from: FROM.COMPANY }] },
   'reports.revenue': { auth: 'member', force: [{ index: 0, key: null, from: FROM.COMPANY }] },
   'reports.utilization': { auth: 'member', force: [{ index: 0, key: null, from: FROM.COMPANY }] },
+  // Per-vehicle revenue split between the company and a sub-lease owner. The
+  // optional car/owner/ownership filters are filters only: the tenant itself is
+  // still forced from the session, so they cannot widen the read.
+  'reports.fleetPerformance': {
+    auth: 'member',
+    force: [{ index: 0, key: null, from: FROM.COMPANY }],
+  },
   // Exposes per-member billing and collection totals, so it is admin-only even
   // though the page is not currently gated in the router.
   'reports.memberActivity': { auth: 'admin', force: [{ index: 0, key: null, from: FROM.COMPANY }] },

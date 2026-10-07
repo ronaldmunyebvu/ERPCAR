@@ -1,4 +1,4 @@
-﻿import { useMemo } from 'react'
+﻿import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   AlertTriangle,
@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { useRepository, useResource, useOverdueTicker } from '@/hooks/useRepository'
+import { useToast } from '@/context/ToastContext'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button, Card, CardHeader, EmptyState, Spinner, TableWrapper, Alert, Badge } from '@/components/ui'
 import { StatCard, RentalStatusBadge } from '@/components/domain/Badges'
@@ -28,6 +29,8 @@ import {
   currencySymbol,
   relativeTime,
   daysBetween,
+  toDateInput,
+  LICENSE_WARNING_DAYS,
   cn,
 } from '@/lib/utils'
 
@@ -55,6 +58,22 @@ export default function DashboardPage() {
     () => repository.rentals.list({ companyId, status: 'active' }),
     `activeRentals|${companyId}|${repository?.mode}`,
   )
+  const toast = useToast()
+  const [renewingId, setRenewingId] = useState(null)
+
+  /** Pays for a fresh 90-day Zinara term for one vehicle. */
+  const renewLicense = async (car) => {
+    setRenewingId(car.id)
+    try {
+      await repository.cars.renewLicense(car.id, toDateInput(new Date()), user)
+      toast.success(`Zinara licence for ${car.registration} renewed for 90 days.`)
+      dash.reload()
+    } catch (cause) {
+      toast.error(cause.message)
+    } finally {
+      setRenewingId(null)
+    }
+  }
 
   const greeting = useMemo(() => {
     const hour = new Date().getHours()
@@ -88,6 +107,9 @@ export default function DashboardPage() {
     .sort((left, right) => new Date(left.expected_return_at) - new Date(right.expected_return_at))
     .slice(0, 5)
 
+  const canManage = isAdmin || company?.members_manage_fleet
+  const expiringLicenses = data.attention.licenses || []
+
   return (
     <>
       <PageHeader
@@ -115,10 +137,45 @@ export default function DashboardPage() {
                   {rental.reference}
                 </Link>
                 <span>
-                  {rental.customer?.full_name} Â· {rental.car?.registration} Â· due{' '}
-                  {formatDateTime(rental.expected_return_at)} Â·{' '}
+                  {rental.customer?.full_name} · {rental.car?.registration} · due{' '}
+                  {formatDateTime(rental.expected_return_at)} ·{' '}
                   {daysBetween(rental.expected_return_at, new Date())} day(s) late
                 </span>
+              </li>
+            ))}
+          </ul>
+        </Alert>
+      )}
+
+      {expiringLicenses.length > 0 && (
+        <Alert
+          tone="warning"
+          icon={AlertTriangle}
+          title={`${expiringLicenses.length} Zinara licence${expiringLicenses.length > 1 ? 's' : ''} expiring within ${LICENSE_WARNING_DAYS} days`}
+          className="mb-4"
+        >
+          <ul className="mt-1 space-y-1.5">
+            {expiringLicenses.map((car) => (
+              <li key={car.id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="font-semibold">{car.registration}</span>
+                <span>
+                  {car.make} {car.model} · expires {formatDate(car.license_valid_to)} ·{' '}
+                  {car.days_left < 0
+                    ? `expired ${Math.abs(car.days_left)} day${Math.abs(car.days_left) === 1 ? '' : 's'} ago`
+                    : car.days_left === 0
+                      ? 'expires today'
+                      : `${car.days_left} day${car.days_left === 1 ? '' : 's'} left`}
+                </span>
+                {canManage && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={renewingId === car.id}
+                    onClick={() => renewLicense(car)}
+                  >
+                    Subscribe
+                  </Button>
+                )}
               </li>
             ))}
           </ul>
@@ -357,7 +414,7 @@ export default function DashboardPage() {
                         {rental.customer?.full_name}
                       </Link>
                       <p className="truncate text-xs text-ink-500">
-                        {rental.car?.make} {rental.car?.model} Â· {rental.car?.registration}
+                        {rental.car?.make} {rental.car?.model} · {rental.car?.registration}
                       </p>
                     </div>
                     <div className="shrink-0 text-right">
@@ -389,7 +446,7 @@ export default function DashboardPage() {
             <div className="p-5">
               <BarList
                 items={data.top_cars.map((car) => ({
-                  label: `${car.label} Â· ${car.registration}`,
+                  label: `${car.label} · ${car.registration}`,
                   value: car.revenue,
                   suffix: ' revenue',
                 }))}
@@ -444,7 +501,7 @@ export default function DashboardPage() {
                     <div className="min-w-0 flex-1">
                       <p className="text-sm text-ink-700">{entry.summary}</p>
                       <p className="text-[11px] text-ink-400">
-                        {entry.user?.full_name || 'System'} Â· {relativeTime(entry.created_at)}
+                        {entry.user?.full_name || 'System'} · {relativeTime(entry.created_at)}
                       </p>
                     </div>
                   </li>

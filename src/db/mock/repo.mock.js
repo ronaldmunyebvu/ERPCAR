@@ -12,6 +12,12 @@ import {
   addDays,
   addMonths,
   daysBetween,
+  toDateInput,
+  licenseDaysLeft,
+  ownerFullName,
+  splitRevenue,
+  LICENSE_WARNING_DAYS,
+  LICENSE_RENEWAL_DAYS,
 } from '@/lib/utils'
 
 /**
@@ -90,13 +96,59 @@ function publicUser(user) {
   return clone(rest)
 }
 
+/** Rows stored before the ownership/licence fields existed are backfilled here. */
 function publicCar(car) {
-  return clone(car)
+  if (!car) return car
+  return {
+    ownership: 'owned',
+    owner_first_name: '',
+    owner_last_name: '',
+    company_share_percent: 100,
+    license_valid_from: null,
+    license_valid_to: null,
+    license_renewed_at: null,
+    ...clone(car),
+  }
 }
 
 function assertFound(entity, label) {
   if (!entity) throw new Error(`${label} not found`)
   return entity
+}
+
+/**
+ * Applies the ownership block of a car payload.
+ *
+ * A patch that does not mention `ownership` (a status toggle, say) leaves the
+ * existing arrangement alone, while switching back to `owned` clears the owner
+ * and restores the company's share to 100%.
+ */
+function applyOwnershipFields(target, input) {
+  if (input.ownership === undefined || input.ownership === null) return
+  const subLease = input.ownership === 'sub_lease'
+  target.ownership = subLease ? 'sub_lease' : 'owned'
+  if (!subLease) {
+    target.owner_first_name = ''
+    target.owner_last_name = ''
+    target.company_share_percent = 100
+    return
+  }
+  target.owner_first_name = String(input.owner_first_name ?? target.owner_first_name ?? '').trim()
+  target.owner_last_name = String(input.owner_last_name ?? target.owner_last_name ?? '').trim()
+  const share = Number(input.company_share_percent ?? target.company_share_percent)
+  target.company_share_percent = Number.isFinite(share)
+    ? Math.min(100, Math.max(0, share))
+    : target.company_share_percent || 0
+}
+
+/** Empty date inputs mean "no licence recorded yet", not an invalid date. */
+function applyLicenseDates(target, input) {
+  if (input.license_valid_from !== undefined) {
+    target.license_valid_from = input.license_valid_from || null
+  }
+  if (input.license_valid_to !== undefined) {
+    target.license_valid_to = input.license_valid_to || null
+  }
 }
 
 /* =============================================================== export */
@@ -476,7 +528,7 @@ export function createMockRepository() {
         }
         const timestamp = new Date().toISOString()
         const car = {
-          id: uid('car_'),
+          id: input.id || uid('car_'),
           company_id: input.company_id,
           make: input.make.trim(),
           model: input.model.trim(),
@@ -488,9 +540,18 @@ export function createMockRepository() {
           status: input.status || 'available',
           photo_url: input.photo_url || '',
           notes: input.notes || '',
+          ownership: 'owned',
+          owner_first_name: '',
+          owner_last_name: '',
+          company_share_percent: 100,
+          license_valid_from: null,
+          license_valid_to: null,
+          license_renewed_at: null,
           created_at: timestamp,
           updated_at: timestamp,
         }
+        applyOwnershipFields(car, input)
+        applyLicenseDates(car, input)
         data.cars.push(car)
         logActivity(data, {
           company_id: input.company_id,
@@ -499,7 +560,12 @@ export function createMockRepository() {
           entity: 'car',
           entity_id: car.id,
           summary: `Added ${car.make} ${car.model} (${car.registration}) to the fleet`,
-          metadata: { registration: car.registration },
+          metadata: {
+            registration: car.registration,
+            ownership: car.ownership,
+            owner: ownerFullName(car),
+            license_valid_to: car.license_valid_to,
+          },
         })
         commit()
         return publicCar(car)
@@ -510,6 +576,8 @@ export function createMockRepository() {
         const car = assertFound(data.cars.find((item) => item.id === id), 'Vehicle')
         const previousStatus = car.status
         Object.assign(car, patch, { updated_at: new Date().toISOString() })
+        applyOwnershipFields(car, patch)
+        applyLicenseDates(car, patch)
         if (patch.registration) car.registration = String(patch.registration).trim().toUpperCase()
         if (patch.daily_rate !== undefined) car.daily_rate = Number(patch.daily_rate) || 0
         const duplicate = data.cars.find(
@@ -529,7 +597,12 @@ export function createMockRepository() {
             previousStatus !== car.status
               ? `Moved ${car.make} ${car.model} (${car.registration}) to ${car.status}`
               : `Updated ${car.make} ${car.model} (${car.registration})`,
-          metadata: { status: car.status },
+          metadata: {
+            status: car.status,
+            ownership: car.ownership,
+            owner: ownerFullName(car),
+            license_valid_to: car.license_valid_to,
+          },
         })
         commit()
         return publicCar(car)
@@ -561,6 +634,35 @@ export function createMockRepository() {
         const data = await db()
         const rows = data.cars.filter((car) => car.company_id === companyId)
         return [...new Set(rows.map((car) => car.category))].sort()
+      },
+
+      /**
+       * Records the licence payment and restarts the Zinara window: the new
+       * term runs for 90 days from the day the subscription is confirmed.
+       *
+       * `onDate` is the subscriber's own calendar day (`YYYY-MM-DD`); it comes
+       * from the browser so a renewal made just after midnight is dated the
+       * same way in the mock and in Neon.
+       */
+      async renewLicense(id, onDate, actor) {
+        const data = await db()
+        const car = assertFound(data.cars.find((item) => item.id === id), 'Vehicle')
+        const today = startOfDay(toDate(onDate) || new Date())
+        car.license_valid_from = toDateInput(today)
+        car.license_valid_to = toDateInput(addDays(today, LICENSE_RENEWAL_DAYS))
+        car.license_renewed_at = new Date().toISOString()
+        car.updated_at = car.license_renewed_at
+        logActivity(data, {
+          company_id: car.company_id,
+          user_id: actor?.id || null,
+          action: 'car.license_renewed',
+          entity: 'car',
+          entity_id: car.id,
+          summary: `Subscribed to a new Zinara licence for ${car.registration} — valid to ${car.license_valid_to}`,
+          metadata: { valid_to: car.license_valid_to, days: LICENSE_RENEWAL_DAYS },
+        })
+        commit()
+        return publicCar(car)
       },
     },
 
@@ -606,7 +708,7 @@ export function createMockRepository() {
         const data = await db()
         const timestamp = new Date().toISOString()
         const customer = {
-          id: uid('cus_'),
+          id: input.id || uid('cus_'),
           company_id: input.company_id,
           full_name: input.full_name.trim(),
           phone: input.phone || '',
@@ -779,12 +881,12 @@ export function createMockRepository() {
         const dailyRate = Number(input.daily_rate ?? car.daily_rate) || 0
         const timestamp = new Date().toISOString()
         const rental = {
-          id: uid('rnt_'),
+          id: input.id || uid('rnt_'),
           company_id: car.company_id,
           car_id: car.id,
           customer_id: customer.id,
           created_by: actor?.id || input.created_by,
-          reference: nextReference(data, car.company_id),
+          reference: input.reference || nextReference(data, car.company_id),
           pickup_at: input.pickup_at,
           expected_return_at: input.expected_return_at,
           actual_return_at: null,
@@ -978,14 +1080,14 @@ export function createMockRepository() {
         })
       },
 
-      async create({ companyId, rental_id, amount, method, reference, note }, actor) {
+      async create({ id, companyId, rental_id, amount, method, reference, note }, actor) {
         const data = await db()
         const rental = assertFound(data.rentals.find((item) => item.id === rental_id), 'Rental')
         const value = Number(amount)
         if (!(value > 0)) throw new Error('Payment amount must be greater than zero.')
 
         const payment = {
-          id: uid('pay_'),
+          id: id || uid('pay_'),
           company_id: companyId || rental.company_id,
           rental_id,
           amount: value,
@@ -1068,6 +1170,24 @@ export function createMockRepository() {
             toDate(rental.expected_return_at) <= addDays(new Date(), 1) && !isOverdue(rental),
         )
 
+        // Zinara licences at or past the warning window, soonest first.
+        const expiringLicenses = cars
+          .map((car) => ({ car, days_left: licenseDaysLeft(car.license_valid_to) }))
+          .filter((entry) => entry.days_left !== null && entry.days_left <= LICENSE_WARNING_DAYS)
+          .sort((left, right) => left.days_left - right.days_left)
+          .map(({ car, days_left }) => ({
+            id: car.id,
+            registration: car.registration,
+            make: car.make,
+            model: car.model,
+            ownership: car.ownership || 'owned',
+            owner: ownerFullName(car),
+            license_valid_from: car.license_valid_from,
+            license_valid_to: car.license_valid_to,
+            license_renewed_at: car.license_renewed_at,
+            days_left,
+          }))
+
         return {
           currency: company?.currency || 'USD',
           counts: {
@@ -1106,6 +1226,7 @@ export function createMockRepository() {
           attention: {
             due_soon: dueSoon.map((rental) => hydrateRental(data, rental)),
             overdue: overdueRentals.map((rental) => hydrateRental(data, rental)),
+            licenses: expiringLicenses,
           },
           upcoming: sortBy(openRentals.filter((rental) => !isOverdue(rental)), 'expected_return_at')
             .slice(0, 6)
@@ -1244,6 +1365,80 @@ export function createMockRepository() {
               days_rented: daysRented,
               utilization: Math.min(100, Math.round((daysRented / windowDays) * 100)),
               revenue,
+              outstanding,
+            }
+          })
+          .sort((a, b) => b.revenue - a.revenue)
+      },
+
+      /**
+       * Revenue earned per vehicle in a period, split between the company and
+       * the owner of a sub-leased vehicle.
+       *
+       * `carId`, `owner` and `ownership` narrow which vehicles are reported on
+       * — "show me Ronald's fleet" is `owner: 'Ronald Munyebvu'` — but they can
+       * never widen the read past `companyId`, which is forced by the manifest.
+       */
+      async fleetPerformance(companyId, { from, to, carId, owner, ownership } = {}) {
+        const data = await db()
+        const start = from ? startOfDay(toDate(from)) : startOfDay(addDays(new Date(), -29))
+        const end = to ? startOfDay(toDate(to)) : startOfDay(new Date())
+        const windowDays = Math.max(1, Math.round((end - start) / 86_400_000) + 1)
+
+        let fleet = data.cars.filter((car) => car.company_id === companyId)
+        if (carId) fleet = fleet.filter((car) => car.id === carId)
+        if (ownership === 'owned' || ownership === 'sub_lease') {
+          fleet = fleet.filter((car) => (car.ownership || 'owned') === ownership)
+        }
+        if (owner) {
+          const needle = String(owner).trim().toLowerCase()
+          fleet = fleet.filter((car) => ownerFullName(car).toLowerCase() === needle)
+        }
+
+        return fleet
+          .map((car) => {
+            const rentals = data.rentals.filter(
+              (rental) =>
+                rental.car_id === car.id &&
+                rental.company_id === companyId &&
+                rental.status !== 'cancelled' &&
+                toDate(rental.pickup_at) >= start &&
+                toDate(rental.pickup_at) < addDays(end, 1),
+            )
+            const daysRented = rentals.reduce((sum, rental) => {
+              const from_ = toDate(rental.pickup_at)
+              const to_ = toDate(rental.actual_return_at || rental.expected_return_at)
+              const days = Math.max(1, daysBetween(from_ < start ? start : from_, to_ > end ? end : to_))
+              return sum + days
+            }, 0)
+            const revenue = rentals.reduce((sum, rental) => sum + rentalTotal(rental), 0)
+            const outstanding = rentals.reduce(
+              (sum, rental) =>
+                sum +
+                rentalBalance({
+                  ...rental,
+                  payments: data.payments.filter((payment) => payment.rental_id === rental.id),
+                }),
+              0,
+            )
+            const split = splitRevenue(revenue, car)
+            return {
+              id: car.id,
+              registration: car.registration,
+              label: `${car.make} ${car.model}`,
+              category: car.category,
+              status: car.status,
+              daily_rate: Number(car.daily_rate),
+              ownership: car.ownership || 'owned',
+              owner: ownerFullName(car),
+              company_share_percent: split.company_percent,
+              owner_share_percent: split.owner_percent,
+              rentals: rentals.length,
+              days_rented: daysRented,
+              utilization: Math.min(100, Math.round((daysRented / windowDays) * 100)),
+              revenue,
+              company_revenue: split.company_amount,
+              owner_revenue: split.owner_amount,
               outstanding,
             }
           })

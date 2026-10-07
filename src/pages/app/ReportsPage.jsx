@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { BarChart3, Car, Download, FileText, Printer, TrendingUp, Users } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { useRepository, useResource } from '@/hooks/useRepository'
 import { PageHeader } from '@/components/layout/PageHeader'
 import {
   Alert,
+  Badge,
   Button,
   Card,
   CardHeader,
@@ -12,6 +13,7 @@ import {
   Field,
   Input,
   SegmentedControl,
+  Select,
   Spinner,
   TableWrapper,
   Tabs,
@@ -27,6 +29,9 @@ import {
   downloadCsv,
   toDateInput,
   addDays,
+  licenseState,
+  ownerFullName,
+  ownershipLabel,
 } from '@/lib/utils'
 
 const PRESETS = [
@@ -63,6 +68,7 @@ export default function ReportsPage() {
   const [from, setFrom] = useState(() => toDateInput(addDays(new Date(), -29)))
   const [to, setTo] = useState(() => toDateInput(new Date()))
   const [tab, setTab] = useState('revenue')
+  const [scope, setScope] = useState('all')
 
   const range = { from, to }
   const key = `${Boolean(repository)}|${companyId}|${from}|${to}`
@@ -78,6 +84,37 @@ export default function ReportsPage() {
   const members = useResource(
     () => repository.reports.memberActivity(companyId, range),
     `members|${key}`,
+  )
+  const fleetCars = useResource(
+    () => repository.cars.list({ companyId }),
+    `carsAll|${Boolean(repository)}|${companyId}`,
+  )
+
+  // One control drives the scope of the performance report: the whole fleet,
+  // one ownership class, one owner's vehicles, or a single vehicle.
+  const scopeFilter = useMemo(() => {
+    if (scope.startsWith('owner:')) return { owner: scope.slice('owner:'.length) }
+    if (scope.startsWith('car:')) return { carId: scope.slice('car:'.length) }
+    if (scope === 'owned' || scope === 'sub_lease') return { ownership: scope }
+    return {}
+  }, [scope])
+
+  const fleet = useResource(
+    () => repository.reports.fleetPerformance(companyId, { ...range, ...scopeFilter }),
+    `fleet|${key}|${scope}`,
+  )
+
+  const owners = useMemo(
+    () =>
+      [
+        ...new Set(
+          (fleetCars.data || [])
+            .filter((car) => car.ownership === 'sub_lease')
+            .map(ownerFullName)
+            .filter(Boolean),
+        ),
+      ].sort(),
+    [fleetCars.data],
   )
 
   const money = (value) => formatMoney(value, currency)
@@ -187,6 +224,8 @@ export default function ReportsPage() {
               tabs={[
                 { value: 'revenue', label: 'Revenue', icon: TrendingUp },
                 { value: 'utilisation', label: 'Car utilisation', icon: Car },
+                { value: 'fleet', label: 'Fleet performance', icon: BarChart3 },
+                { value: 'licenses', label: 'Licences', icon: FileText },
                 { value: 'staff', label: 'Staff activity', icon: Users },
                 { value: 'status', label: 'By status', icon: FileText },
               ]}
@@ -248,6 +287,26 @@ export default function ReportsPage() {
                   rows={utilization.data || []}
                   currency={currency}
                   bars={utilisationBars}
+                />
+              )}
+
+              {tab === 'fleet' && (
+                <FleetPerformanceTab
+                  loading={fleet.loading}
+                  rows={fleet.data || []}
+                  currency={currency}
+                  scope={scope}
+                  onScopeChange={setScope}
+                  owners={owners}
+                  cars={fleetCars.data || []}
+                />
+              )}
+
+              {tab === 'licenses' && (
+                <LicencesTab
+                  loading={fleetCars.loading}
+                  rows={fleetCars.data || []}
+                  currency={currency}
                 />
               )}
 
@@ -429,6 +488,326 @@ function StaffTab({ loading, rows, currency }) {
                 {formatMoney(row.collected, currency)}
               </td>
               <td className="text-right tabular-nums text-ink-500">{row.actions}</td>
+            </tr>
+          ))}
+        </tbody>
+      </TableWrapper>
+    </div>
+  )
+}
+/**
+ * Revenue per vehicle for the period, split between the company and the owner
+ * of a sub-leased vehicle, narrowed to one scope of the fleet.
+ */
+function FleetPerformanceTab({ loading, rows, currency, scope, onScopeChange, owners, cars }) {
+  const totals = rows.reduce(
+    (acc, row) => ({
+      revenue: acc.revenue + row.revenue,
+      company: acc.company + row.company_revenue,
+      owner: acc.owner + row.owner_revenue,
+      outstanding: acc.outstanding + row.outstanding,
+    }),
+    { revenue: 0, company: 0, owner: 0, outstanding: 0 },
+  )
+
+  const exportCsv = () =>
+    downloadCsv(
+      `fleet-performance-${toDateInput(new Date())}`,
+      [
+        { label: 'Registration', value: (row) => row.registration },
+        { label: 'Vehicle', value: (row) => row.label },
+        { label: 'Ownership', value: (row) => ownershipLabel(row.ownership) },
+        { label: 'Owner', value: (row) => row.owner },
+        { label: 'Company share %', value: (row) => row.company_share_percent },
+        { label: 'Rentals', value: (row) => row.rentals },
+        { label: 'Days rented', value: (row) => row.days_rented },
+        { label: 'Utilisation %', value: (row) => row.utilization },
+        { label: 'Revenue', value: (row) => row.revenue },
+        { label: 'Company revenue', value: (row) => row.company_revenue },
+        { label: 'Owner revenue', value: (row) => row.owner_revenue },
+        { label: 'Outstanding', value: (row) => row.outstanding },
+      ],
+      rows,
+    )
+
+  if (loading) return <Spinner />
+  if (rows.length === 0) {
+    return <EmptyState icon={Car} title="No vehicles match this scope" />
+  }
+
+  const companyPercent =
+    totals.revenue > 0 ? Math.round((totals.company / totals.revenue) * 100) : 100
+
+  return (
+    <div>
+      <div className="mb-5 flex flex-wrap items-end gap-3">
+        <Field label="Scope" className="w-full sm:w-72">
+          <Select value={scope} onChange={(event) => onScopeChange(event.target.value)}>
+            <option value="all">Entire fleet</option>
+            <option value="owned">Owned vehicles</option>
+            <option value="sub_lease">Sub-leased vehicles</option>
+            {owners.length > 0 && (
+              <optgroup label="Owner's fleet">
+                {owners.map((owner) => (
+                  <option key={owner} value={`owner:${owner}`}>
+                    {owner}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            <optgroup label="One vehicle">
+              {cars.map((car) => (
+                <option key={car.id} value={`car:${car.id}`}>
+                  {car.registration} — {car.make} {car.model}
+                </option>
+              ))}
+            </optgroup>
+          </Select>
+        </Field>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="mb-1"
+          onClick={exportCsv}
+          disabled={!rows.length}
+        >
+          <Download size={14} />
+          Export CSV
+        </Button>
+      </div>
+
+      <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Revenue in period"
+          value={totals.revenue}
+          currency={currency}
+          sublabel={`${rows.length} vehicle${rows.length === 1 ? '' : 's'} in scope`}
+          icon={TrendingUp}
+          tone="brand"
+        />
+        <StatCard
+          label="Company share"
+          value={totals.company}
+          currency={currency}
+          sublabel={`${companyPercent}% of revenue`}
+          icon={BarChart3}
+          tone="success"
+        />
+        <StatCard
+          label="Owner share"
+          value={totals.owner}
+          currency={currency}
+          sublabel={`Paid out to sub-lease owners`}
+          icon={Users}
+          tone="warning"
+        />
+        <StatCard
+          label="Outstanding"
+          value={totals.outstanding}
+          currency={currency}
+          sublabel="Still owed by customers"
+          icon={FileText}
+          tone={totals.outstanding > 0 ? 'danger' : 'success'}
+        />
+      </div>
+
+      <TableWrapper>
+        <thead>
+          <tr>
+            <th>Vehicle</th>
+            <th>Ownership</th>
+            <th className="text-right">Rentals</th>
+            <th className="text-right">Days rented</th>
+            <th className="text-right">Utilisation</th>
+            <th className="text-right">Revenue</th>
+            <th className="text-right">Company share</th>
+            <th className="text-right">Owner share</th>
+            <th className="text-right">Outstanding</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.id}>
+              <td>
+                <span className="font-medium text-ink-800">{row.label}</span>
+                <span className="block font-mono text-xs text-ink-400">{row.registration}</span>
+              </td>
+              <td>
+                <Badge tone={row.ownership === 'sub_lease' ? 'warning' : 'info'} size="sm">
+                  {ownershipLabel(row.ownership)}
+                </Badge>
+                {row.ownership === 'sub_lease' && (
+                  <span className="mt-1 block text-xs text-ink-500">
+                    {row.owner || 'Owner not recorded'} · {row.company_share_percent}%
+                  </span>
+                )}
+              </td>
+              <td className="text-right tabular-nums">{row.rentals}</td>
+              <td className="text-right tabular-nums">{row.days_rented}</td>
+              <td className="text-right tabular-nums">{row.utilization}%</td>
+              <td className="text-right font-medium tabular-nums">
+                {formatMoney(row.revenue, currency)}
+              </td>
+              <td className="text-right tabular-nums text-emerald-700">
+                {formatMoney(row.company_revenue, currency)}
+              </td>
+              <td className="text-right tabular-nums text-amber-700">
+                {row.ownership === 'sub_lease' ? formatMoney(row.owner_revenue, currency) : '—'}
+              </td>
+              <td className="text-right tabular-nums">
+                {row.outstanding > 0 ? (
+                  <span className="font-medium text-red-600">
+                    {formatMoney(row.outstanding, currency)}
+                  </span>
+                ) : (
+                  <span className="text-ink-300">—</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr className="bg-ink-50">
+            <td colSpan={5} className="px-4 py-3 text-xs text-ink-500">
+              Totals for this scope
+            </td>
+            <td className="px-4 py-3 text-right font-semibold tabular-nums text-ink-800">
+              {formatMoney(totals.revenue, currency)}
+            </td>
+            <td className="px-4 py-3 text-right font-semibold tabular-nums text-emerald-700">
+              {formatMoney(totals.company, currency)}
+            </td>
+            <td className="px-4 py-3 text-right font-semibold tabular-nums text-amber-700">
+              {formatMoney(totals.owner, currency)}
+            </td>
+            <td className="px-4 py-3 text-right font-semibold tabular-nums text-ink-800">
+              {formatMoney(totals.outstanding, currency)}
+            </td>
+          </tr>
+        </tfoot>
+      </TableWrapper>
+    </div>
+  )
+}
+
+/**
+ * Every Zinara licence in the fleet, soonest to expire first, so a lapsed term
+ * never hides behind a vehicle that happens to have no rentals.
+ */
+function LicencesTab({ loading, rows }) {
+  if (loading) return <Spinner />
+
+  const licenceRows = rows
+    .map((car) => ({ car, licence: licenseState(car.license_valid_to) }))
+    .sort((left, right) => {
+      if (left.licence.days === null) return 1
+      if (right.licence.days === null) return -1
+      return left.licence.days - right.licence.days
+    })
+
+  const counts = licenceRows.reduce(
+    (acc, entry) => ({ ...acc, [entry.licence.state]: acc[entry.licence.state] + 1 }),
+    { valid: 0, expiring: 0, expired: 0, none: 0 },
+  )
+
+  const exportCsv = () =>
+    downloadCsv(
+      `zinara-licences-${toDateInput(new Date())}`,
+      [
+        { label: 'Registration', value: ({ car }) => car.registration },
+        { label: 'Vehicle', value: ({ car }) => `${car.make} ${car.model}` },
+        { label: 'Ownership', value: ({ car }) => ownershipLabel(car.ownership) },
+        { label: 'Owner', value: ({ car }) => ownerFullName(car) },
+        { label: 'Licence from', value: ({ car }) => car.license_valid_from || '' },
+        { label: 'Licence to', value: ({ car }) => car.license_valid_to || '' },
+        { label: 'Days left', value: ({ licence }) => licence.days ?? '' },
+        { label: 'State', value: ({ licence }) => licence.state },
+        { label: 'Company share %', value: ({ car }) => car.company_share_percent },
+      ],
+      licenceRows,
+    )
+
+  if (licenceRows.length === 0) {
+    return <EmptyState icon={FileText} title="No vehicles yet" message="Add vehicles to record their Zinara licences." />
+  }
+
+  return (
+    <div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-ink-500">
+          {counts.valid} valid · {counts.expiring} expiring · {counts.expired} expired ·{' '}
+          {counts.none} not recorded
+        </p>
+        <Button variant="secondary" size="sm" onClick={exportCsv}>
+          <Download size={14} />
+          Export CSV
+        </Button>
+      </div>
+
+      <TableWrapper>
+        <thead>
+          <tr>
+            <th>Vehicle</th>
+            <th>Ownership</th>
+            <th>Owner</th>
+            <th>Valid from</th>
+            <th>Valid to</th>
+            <th className="text-right">Days left</th>
+            <th className="text-right">Company share</th>
+          </tr>
+        </thead>
+        <tbody>
+          {licenceRows.map(({ car, licence }) => (
+            <tr key={car.id}>
+              <td>
+                <span className="font-medium text-ink-800">{car.make} {car.model}</span>
+                <span className="block font-mono text-xs text-ink-400">{car.registration}</span>
+              </td>
+              <td>
+                <Badge tone={car.ownership === 'sub_lease' ? 'warning' : 'info'} size="sm">
+                  {ownershipLabel(car.ownership)}
+                </Badge>
+              </td>
+              <td>{ownerFullName(car) || <span className="text-ink-300">—</span>}</td>
+              <td>{car.license_valid_from ? formatDate(car.license_valid_from) : <span className="text-ink-300">—</span>}</td>
+              <td>
+                {car.license_valid_to ? (
+                  <Badge
+                    tone={
+                      licence.state === 'expired'
+                        ? 'danger'
+                        : licence.state === 'expiring'
+                          ? 'warning'
+                          : 'success'
+                    }
+                    size="sm"
+                  >
+                    {formatDate(car.license_valid_to)}
+                  </Badge>
+                ) : (
+                  <span className="text-ink-300">—</span>
+                )}
+              </td>
+              <td className="text-right tabular-nums">
+                {licence.days === null ? (
+                  <span className="text-ink-300">—</span>
+                ) : (
+                  <span
+                    className={
+                      licence.state === 'expired'
+                        ? 'font-medium text-red-600'
+                        : licence.state === 'expiring'
+                          ? 'font-medium text-amber-700'
+                          : 'text-ink-700'
+                    }
+                  >
+                    {licence.days < 0 ? `${Math.abs(licence.days)} over` : licence.days}
+                  </span>
+                )}
+              </td>
+              <td className="text-right tabular-nums">
+                {car.ownership === 'sub_lease' ? `${car.company_share_percent ?? 100}%` : <span className="text-ink-300">—</span>}
+              </td>
             </tr>
           ))}
         </tbody>

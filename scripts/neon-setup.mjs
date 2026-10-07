@@ -213,13 +213,57 @@ async function seed(sql) {
     ['Toyota', 'Land Cruiser', 2023, 'FCH-6609', 'White', 'suv', 320, 'rented'],
   ]
 
+  // A few vehicles are sub-leased, and their Zinara terms sit on both sides of
+  // the 5-day warning window, so the revenue split and the expiry alert are
+  // both visible before anything is added by hand.
+  const carExtras = {
+    2: {
+      ownership: 'sub_lease',
+      owner_first_name: 'Ronald',
+      owner_last_name: 'Munyebvu',
+      company_share_percent: 70,
+      license_days_left: 3,
+    },
+    5: { license_days_left: 5 },
+    7: {
+      ownership: 'sub_lease',
+      owner_first_name: 'Peter',
+      owner_last_name: 'Sanyatwe',
+      company_share_percent: 65,
+      license_days_left: -2,
+    },
+    10: {
+      ownership: 'sub_lease',
+      owner_first_name: 'Ronald',
+      owner_last_name: 'Munyebvu',
+      company_share_percent: 80,
+      license_days_left: 74,
+    },
+  }
+
+  /** A calendar date `offset` days from today, in the `YYYY-MM-DD` form. */
+  const day = (offset) => {
+    const date = new Date()
+    date.setUTCDate(date.getUTCDate() + offset)
+    return date.toISOString().slice(0, 10)
+  }
+
   const cars = []
+  let defIndex = 0
   for (const [make, model, carYear, registration, color, category, rate, status] of carDefs) {
+    const extra = carExtras[defIndex] || {}
+    const daysLeft = extra.license_days_left ?? 46
     const [row] = await sql`
-      INSERT INTO cars (company_id, make, model, year, registration, color, category, daily_rate, status)
-      VALUES (${company.id}, ${make}, ${model}, ${carYear}, ${registration}, ${color}, ${category}, ${rate}, ${status})
+      INSERT INTO cars (company_id, make, model, year, registration, color, category, daily_rate, status,
+                        ownership, owner_first_name, owner_last_name, company_share_percent,
+                        license_valid_from, license_valid_to)
+      VALUES (${company.id}, ${make}, ${model}, ${carYear}, ${registration}, ${color}, ${category}, ${rate}, ${status},
+              ${extra.ownership || 'owned'}, ${extra.owner_first_name || ''}, ${extra.owner_last_name || ''},
+              ${extra.ownership ? extra.company_share_percent : 100},
+              ${day(daysLeft - 90)}, ${day(daysLeft)})
       RETURNING id, registration, daily_rate`
     cars.push({ ...row, daily_rate: Number(row.daily_rate) })
+    defIndex += 1
   }
 
   const customerDefs = [

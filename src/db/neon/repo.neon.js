@@ -8,7 +8,19 @@
  * that computes it.
  */
 import { hashPassword, verifyPassword, randomToken } from '../../lib/crypto.js'
-import { isOverdue, rentalTotal, rentalBalance, startOfDay, addDays, daysBetween } from '../../lib/utils.js'
+import {
+  isOverdue,
+  rentalTotal,
+  rentalBalance,
+  startOfDay,
+  addDays,
+  daysBetween,
+  toDate,
+  ownerFullName,
+  splitRevenue,
+  LICENSE_RENEWAL_DAYS,
+  LICENSE_WARNING_DAYS,
+} from '../../lib/utils.js'
 
 /**
  * Neon (PostgreSQL) data source.
@@ -35,6 +47,13 @@ const PUBLIC_USER_COLUMNS = `
 function num(value, fallback = 0) {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
+}
+
+/** The company's share of a sub-lease vehicle's revenue, clamped to 0–100. */
+function sharePercent(value, fallback = 0) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.min(100, Math.max(0, parsed))
 }
 
 /**
@@ -167,12 +186,61 @@ export async function createNeonRepository(connectionString, sql) {
     return { ...payment, amount: num(payment.amount) }
   }
 
+  /** Numeric and null normalisation shared by every car projection. */
+  function shapeCar(car) {
+    if (!car) return car
+    return {
+      ...car,
+      daily_rate: num(car.daily_rate),
+      ownership: car.ownership || 'owned',
+      owner_first_name: car.owner_first_name || '',
+      owner_last_name: car.owner_last_name || '',
+      company_share_percent: num(car.company_share_percent, 100),
+      license_valid_from: car.license_valid_from || null,
+      license_valid_to: car.license_valid_to || null,
+      license_renewed_at: car.license_renewed_at || null,
+    }
+  }
+
   return {
     mode: 'neon',
 
     async bootstrap() {
       await one('SELECT 1')
       return true
+    },
+    offline: {
+      async snapshot(companyId) {
+        const [company, users, cars, customers, rentals, payments, activity] = await Promise.all([
+          one('SELECT * FROM companies WHERE id = $1', [companyId]),
+          rows(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE company_id = $1 ORDER BY full_name`, [companyId]),
+          rows('SELECT * FROM cars WHERE company_id = $1 ORDER BY registration', [companyId]),
+          rows('SELECT * FROM customers WHERE company_id = $1 ORDER BY full_name', [companyId]),
+          rows('SELECT * FROM rentals WHERE company_id = $1 ORDER BY pickup_at DESC', [companyId]),
+          rows('SELECT * FROM payments WHERE company_id = $1 ORDER BY received_at DESC', [companyId]),
+          rows('SELECT * FROM activity_log WHERE company_id = $1 ORDER BY created_at DESC LIMIT 500', [companyId]),
+        ])
+        return {
+          version: 1,
+          seeded_at: new Date().toISOString(),
+          companies: company ? [company] : [],
+          users,
+          cars: cars.map((car) => ({ ...car, daily_rate: num(car.daily_rate) })),
+          customers,
+          rentals: rentals.map((rental) => ({
+            ...rental,
+            daily_rate: num(rental.daily_rate),
+            total_amount: num(rental.total_amount),
+            deposit_amount: num(rental.deposit_amount),
+            additional_charges: Array.isArray(rental.additional_charges)
+              ? rental.additional_charges
+              : JSON.parse(rental.additional_charges || '[]'),
+          })),
+          payments: payments.map(shapePaymentRow),
+          activity,
+          password_resets: [],
+        }
+      },
     },
     onChange() {
       return () => {}
@@ -550,8 +618,7 @@ export async function createNeonRepository(connectionString, sql) {
         )
         const hydrated = await Promise.all(
           list.map(async (car) => ({
-            ...car,
-            daily_rate: num(car.daily_rate),
+            ...shapeCar(car),
             current_rental: car.current_rental
               ? decorateRental(
                   await one(`${RENTAL_SELECT} WHERE r.id = $1`, [car.current_rental.id]),
@@ -564,21 +631,30 @@ export async function createNeonRepository(connectionString, sql) {
 
       async get(id) {
         const car = await one('SELECT * FROM cars WHERE id = $1', [id])
-        return car ? { ...car, daily_rate: num(car.daily_rate) } : null
+        return shapeCar(car)
       },
 
       async create(input, actor) {
+        if (input.id) {
+          const existing = await one('SELECT * FROM cars WHERE id = $1', [input.id])
+          if (existing) return shapeCar(existing)
+        }
         const registration = String(input.registration).trim().toUpperCase()
         const clash = await one(
           'SELECT id FROM cars WHERE company_id = $1 AND lower(registration) = lower($2)',
           [input.company_id, registration],
         )
         if (clash) throw new Error(`Registration ${registration} already exists in the fleet.`)
+        const subLease = input.ownership === 'sub_lease'
         const car = await one(
-          `INSERT INTO cars (company_id, make, model, year, registration, color, category,
-                             daily_rate, status, photo_url, notes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+          `INSERT INTO cars (id, company_id, make, model, year, registration, color, category,
+                             daily_rate, status, photo_url, notes,
+                             ownership, owner_first_name, owner_last_name, company_share_percent,
+                             license_valid_from, license_valid_to)
+           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+                   $13,$14,$15,$16,$17::date,$18::date) RETURNING *`,
           [
+            input.id || null,
             input.company_id,
             input.make,
             input.model,
@@ -590,6 +666,12 @@ export async function createNeonRepository(connectionString, sql) {
             input.status || 'available',
             input.photo_url || null,
             input.notes || null,
+            subLease ? 'sub_lease' : 'owned',
+            subLease ? String(input.owner_first_name || '').trim() : '',
+            subLease ? String(input.owner_last_name || '').trim() : '',
+            subLease ? sharePercent(input.company_share_percent) : 100,
+            input.license_valid_from || null,
+            input.license_valid_to || null,
           ],
         )
         await logActivity({
@@ -599,9 +681,14 @@ export async function createNeonRepository(connectionString, sql) {
           entity: 'car',
           entity_id: car.id,
           summary: `Added ${car.make} ${car.model} (${car.registration}) to the fleet`,
-          metadata: { registration: car.registration },
+          metadata: {
+            registration: car.registration,
+            ownership: car.ownership,
+            owner: ownerFullName(car),
+            license_valid_to: car.license_valid_to,
+          },
         })
-        return { ...car, daily_rate: num(car.daily_rate) }
+        return shapeCar(car)
       },
 
       async update(id, patch, actor) {
@@ -614,6 +701,34 @@ export async function createNeonRepository(connectionString, sql) {
           )
           if (clash) throw new Error(`Registration ${patch.registration} already exists in the fleet.`)
         }
+        const nextOwnership =
+          patch.ownership !== undefined && patch.ownership !== null
+            ? patch.ownership === 'sub_lease'
+              ? 'sub_lease'
+              : 'owned'
+            : previous.ownership || 'owned'
+        const subLease = nextOwnership === 'sub_lease'
+        // Ownership is assigned rather than COALESCEd so that switching a
+        // vehicle back to `owned` always clears the owner and restores the
+        // company's share, whatever the client sent.
+        const ownerFirst = subLease
+          ? String(patch.owner_first_name ?? previous.owner_first_name ?? '').trim()
+          : ''
+        const ownerLast = subLease
+          ? String(patch.owner_last_name ?? previous.owner_last_name ?? '').trim()
+          : ''
+        const share = subLease
+          ? sharePercent(patch.company_share_percent ?? previous.company_share_percent, 0)
+          : 100
+        const validFrom =
+          patch.license_valid_from === undefined
+            ? previous.license_valid_from || null
+            : patch.license_valid_from || null
+        const validTo =
+          patch.license_valid_to === undefined
+            ? previous.license_valid_to || null
+            : patch.license_valid_to || null
+
         const car = await one(
           `UPDATE cars SET
              make = COALESCE($2, make),
@@ -626,6 +741,12 @@ export async function createNeonRepository(connectionString, sql) {
              status = COALESCE($9, status),
              photo_url = COALESCE($10, photo_url),
              notes = COALESCE($11, notes),
+             ownership = $12,
+             owner_first_name = $13,
+             owner_last_name = $14,
+             company_share_percent = $15,
+             license_valid_from = $16::date,
+             license_valid_to = $17::date,
              updated_at = now()
            WHERE id = $1 RETURNING *`,
           [
@@ -640,6 +761,12 @@ export async function createNeonRepository(connectionString, sql) {
             patch.status ?? null,
             patch.photo_url ?? null,
             patch.notes ?? null,
+            nextOwnership,
+            ownerFirst,
+            ownerLast,
+            share,
+            validFrom,
+            validTo,
           ],
         )
         await logActivity({
@@ -652,9 +779,14 @@ export async function createNeonRepository(connectionString, sql) {
             previous.status !== car.status
               ? `Moved ${car.make} ${car.model} (${car.registration}) to ${car.status}`
               : `Updated ${car.make} ${car.model} (${car.registration})`,
-          metadata: { status: car.status },
+          metadata: {
+            status: car.status,
+            ownership: car.ownership,
+            owner: ownerFullName(car),
+            license_valid_to: car.license_valid_to,
+          },
         })
-        return { ...car, daily_rate: num(car.daily_rate) }
+        return shapeCar(car)
       },
 
       async remove(id, actor) {
@@ -685,6 +817,38 @@ export async function createNeonRepository(connectionString, sql) {
         )
         return result.map((row) => row.category)
       },
+
+      /**
+       * Records the licence payment and restarts the Zinara window: the new
+       * term runs for 90 days from `onDate`, the subscriber's own calendar day,
+       * which the browser sends so the row is dated identically in the mock
+       * build and in Neon (the function host's clock is UTC).
+       */
+      async renewLicense(id, onDate, actor) {
+        const car = await one('SELECT * FROM cars WHERE id = $1', [id])
+        if (!car) throw new Error('Vehicle not found')
+        const start = /^\d{4}-\d{2}-\d{2}$/.test(String(onDate || '')) ? onDate : null
+        const renewed = await one(
+          `UPDATE cars
+              SET license_valid_from = COALESCE($2::date, current_date),
+                  license_valid_to = COALESCE($2::date, current_date) + $3::int * interval '1 day',
+                  license_renewed_at = now(),
+                  updated_at = now()
+            WHERE id = $1
+            RETURNING *`,
+          [id, start, LICENSE_RENEWAL_DAYS],
+        )
+        await logActivity({
+          company_id: car.company_id,
+          user_id: actor?.id || null,
+          action: 'car.license_renewed',
+          entity: 'car',
+          entity_id: id,
+          summary: `Subscribed to a new Zinara licence for ${car.registration} — valid to ${renewed.license_valid_to}`,
+          metadata: { valid_to: renewed.license_valid_to, days: LICENSE_RENEWAL_DAYS },
+        })
+        return shapeCar(renewed)
+      },
     },
 
     /* ========================================================== customers */
@@ -712,10 +876,15 @@ export async function createNeonRepository(connectionString, sql) {
       },
 
       async create(input, actor) {
+        if (input.id) {
+          const existing = await one('SELECT * FROM customers WHERE id = $1', [input.id])
+          if (existing) return existing
+        }
         const customer = await one(
-          `INSERT INTO customers (company_id, full_name, phone, email, id_number, driver_license, address, notes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+          `INSERT INTO customers (id, company_id, full_name, phone, email, id_number, driver_license, address, notes)
+           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
           [
+            input.id || null,
             input.company_id,
             input.full_name,
             input.phone || null,
@@ -860,6 +1029,10 @@ export async function createNeonRepository(connectionString, sql) {
       },
 
       async create(input, actor) {
+        if (input.id) {
+          const existing = await one('SELECT id FROM rentals WHERE id = $1', [input.id])
+          if (existing) return this.get(input.id, { companyId: input.company_id })
+        }
         const car = await one('SELECT * FROM cars WHERE id = $1', [input.car_id])
         if (!car) throw new Error('Vehicle not found')
         if (car.status === 'maintenance' || car.status === 'inactive') {
@@ -902,15 +1075,17 @@ export async function createNeonRepository(connectionString, sql) {
            FROM rentals WHERE company_id = $1 AND reference LIKE $2`,
           [car.company_id, `RNT-${year}-%`],
         )
-        const reference = `RNT-${year}-${String(num(highest?.value) + 1).padStart(4, '0')}`
+        const reference =
+          input.reference || `RNT-${year}-${String(num(highest?.value) + 1).padStart(4, '0')}`
 
         const rental = await one(
-          `INSERT INTO rentals (company_id, car_id, customer_id, created_by, reference, pickup_at,
+          `INSERT INTO rentals (id, company_id, car_id, customer_id, created_by, reference, pickup_at,
                                 expected_return_at, daily_rate, days, total_amount, deposit_amount,
                                 additional_charges, status, notes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,'active',$13)
+           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,'active',$14)
            RETURNING *`,
           [
+            input.id || null,
             car.company_id,
             car.id,
             input.customer_id,
@@ -1138,15 +1313,20 @@ export async function createNeonRepository(connectionString, sql) {
         return list.map(shapePaymentRow)
       },
 
-      async create({ companyId, rental_id, amount, method, reference, note }, actor) {
+      async create({ id, companyId, rental_id, amount, method, reference, note }, actor) {
+        if (id) {
+          const existing = await one('SELECT * FROM payments WHERE id = $1', [id])
+          if (existing) return shapePaymentRow(existing)
+        }
         const rental = await one('SELECT * FROM rentals WHERE id = $1', [rental_id])
         if (!rental) throw new Error('Rental not found')
         const value = Number(amount)
         if (!(value > 0)) throw new Error('Payment amount must be greater than zero.')
         const payment = await one(
-          `INSERT INTO payments (company_id, rental_id, amount, method, reference, note, received_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+          `INSERT INTO payments (id, company_id, rental_id, amount, method, reference, note, received_by)
+           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
           [
+            id || null,
             companyId || rental.company_id,
             rental_id,
             value,
@@ -1207,8 +1387,17 @@ export async function createNeonRepository(connectionString, sql) {
     /* ============================================================ reports */
     reports: {
       async dashboard(companyId) {
-        const [company, counts, money, overdueRows, dueSoonRows, upcomingRows, recentRows, activityRows] =
-          await Promise.all([
+        const [
+          company,
+          counts,
+          money,
+          overdueRows,
+          dueSoonRows,
+          upcomingRows,
+          recentRows,
+          activityRows,
+          licenseRows,
+        ] = await Promise.all([
             one('SELECT * FROM companies WHERE id = $1', [companyId]),
             one(
               `SELECT
@@ -1271,10 +1460,35 @@ export async function createNeonRepository(connectionString, sql) {
                WHERE a.company_id = $1 ORDER BY a.created_at DESC LIMIT 8`,
               [companyId],
             ),
+            // Zinara licences at or past the warning window, soonest first.
+            rows(
+              `SELECT id, registration, make, model, ownership, owner_first_name, owner_last_name,
+                      license_valid_from, license_valid_to, license_renewed_at,
+                      (license_valid_to - current_date)::int AS days_left
+                 FROM cars
+                WHERE company_id = $1
+                  AND license_valid_to IS NOT NULL
+                  AND license_valid_to <= current_date + $2::int
+                ORDER BY license_valid_to`,
+              [companyId, LICENSE_WARNING_DAYS],
+            ),
           ])
 
         const shape = (rental) =>
           decorateRental({ ...rental, payments: (rental.payments || []).map(shapePaymentRow) })
+
+        const shapeLicense = (row) => ({
+          id: row.id,
+          registration: row.registration,
+          make: row.make,
+          model: row.model,
+          ownership: row.ownership || 'owned',
+          owner: ownerFullName(row),
+          license_valid_from: row.license_valid_from || null,
+          license_valid_to: row.license_valid_to || null,
+          license_renewed_at: row.license_renewed_at || null,
+          days_left: num(row.days_left),
+        })
 
         return {
           currency: company?.currency || 'USD',
@@ -1303,6 +1517,7 @@ export async function createNeonRepository(connectionString, sql) {
           attention: {
             due_soon: dueSoonRows.map(shape),
             overdue: overdueRows.map(shape),
+            licenses: licenseRows.map(shapeLicense),
           },
           upcoming: upcomingRows.map(shape),
           recent: recentRows.map(shape),
@@ -1409,7 +1624,7 @@ export async function createNeonRepository(connectionString, sql) {
                   count(r.id)::int AS rentals,
                   COALESCE(sum(LEAST(GREATEST(
                     EXTRACT(EPOCH FROM (coalesce(r.actual_return_at, r.expected_return_at) - r.pickup_at))::numeric / 86400,
-                    1), $3)), 0)::float AS days_rented,
+                    1), $3)) FILTER (WHERE r.id IS NOT NULL), 0)::float AS days_rented,
                   COALESCE(sum(r.total_amount
                     + COALESCE((SELECT SUM((x->>'amount')::numeric)
                                 FROM jsonb_array_elements(r.additional_charges) AS x), 0)), 0)::float AS revenue
@@ -1445,6 +1660,100 @@ export async function createNeonRepository(connectionString, sql) {
             days_rented: daysRented,
             utilization: Math.min(100, Math.round((daysRented / windowDays) * 100)),
             revenue: num(row.revenue),
+            outstanding: outstandingByCar.get(row.id) ?? 0,
+          }
+        })
+      },
+
+      /**
+       * Revenue earned per vehicle in a period, split between the company and
+       * the owner of a sub-leased vehicle.
+       *
+       * `carId`, `owner` and `ownership` narrow which vehicles are reported on
+       * — "show me Ronald's fleet" is `owner: 'Ronald Munyebvu'` — but they can
+       * never widen the read past `companyId`, which the manifest forces first.
+       */
+      async fleetPerformance(companyId, { from, to, carId, owner, ownership } = {}) {
+        const start = from ? startOfDay(toDate(from)) : startOfDay(addDays(new Date(), -29))
+        const end = to ? startOfDay(toDate(to)) : startOfDay(new Date())
+        const windowDays = Math.max(1, Math.round((end - start) / 86_400_000) + 1)
+
+        const params = [companyId, start.toISOString(), end.toISOString(), windowDays]
+        // Only predicates on `cars` belong in the WHERE clause: the period
+        // lives in the JOIN, so a vehicle with no rentals in the window still
+        // reports with zeros instead of being filtered out by an outer join.
+        const clauses = ['c.company_id = $1']
+        if (carId) {
+          params.push(carId)
+          clauses.push(`c.id = $${params.length}`)
+        }
+        if (ownership === 'owned' || ownership === 'sub_lease') {
+          params.push(ownership)
+          clauses.push(`c.ownership = $${params.length}`)
+        }
+        if (owner) {
+          params.push(String(owner).trim().toLowerCase())
+          clauses.push(
+            `lower(btrim(c.owner_first_name || ' ' || c.owner_last_name)) = $${params.length}`,
+          )
+        }
+
+        const list = await rows(
+          `SELECT c.id, c.registration, (c.make || ' ' || c.model) AS car_label, c.category, c.status,
+                  c.daily_rate::float AS daily_rate,
+                  COALESCE(c.ownership, 'owned') AS ownership,
+                  c.owner_first_name, c.owner_last_name,
+                  COALESCE(c.company_share_percent, 100)::float AS company_share_percent,
+                  count(r.id)::int AS rentals,
+                  COALESCE(sum(GREATEST(1, LEAST(
+                    EXTRACT(EPOCH FROM (
+                      least(coalesce(r.actual_return_at, r.expected_return_at), $3::timestamptz + interval '1 day')
+                      - greatest(r.pickup_at, $2::timestamptz)
+                    ))::numeric / 86400,
+                    $4))) FILTER (WHERE r.id IS NOT NULL), 0)::float AS days_rented,
+                  COALESCE(sum(r.total_amount
+                    + COALESCE((SELECT SUM((x->>'amount')::numeric)
+                                FROM jsonb_array_elements(r.additional_charges) AS x), 0)), 0)::float AS revenue
+             FROM cars c
+             LEFT JOIN rentals r ON r.car_id = c.id AND r.status <> 'cancelled'
+               AND r.pickup_at >= $2::timestamptz
+               AND r.pickup_at < $3::timestamptz + interval '1 day'
+            WHERE ${clauses.join(' AND ')}
+            GROUP BY c.id
+            ORDER BY revenue DESC`,
+          params,
+        )
+
+        const outstanding = await rows(
+          `SELECT car_id, coalesce(sum(balance), 0)::float AS outstanding
+             FROM rentals_with_balance
+            WHERE company_id = $1 AND status <> 'cancelled'
+              AND pickup_at >= $2::timestamptz AND pickup_at < $3::timestamptz + interval '1 day'
+            GROUP BY car_id`,
+          [companyId, start.toISOString(), end.toISOString()],
+        )
+        const outstandingByCar = new Map(outstanding.map((row) => [row.car_id, num(row.outstanding)]))
+
+        return list.map((row) => {
+          const daysRented = Math.round(num(row.days_rented))
+          const split = splitRevenue(num(row.revenue), row)
+          return {
+            id: row.id,
+            registration: row.registration,
+            label: row.car_label,
+            category: row.category,
+            status: row.status,
+            daily_rate: num(row.daily_rate),
+            ownership: row.ownership || 'owned',
+            owner: ownerFullName(row),
+            company_share_percent: split.company_percent,
+            owner_share_percent: split.owner_percent,
+            rentals: num(row.rentals),
+            days_rented: daysRented,
+            utilization: Math.min(100, Math.round((daysRented / windowDays) * 100)),
+            revenue: num(row.revenue),
+            company_revenue: split.company_amount,
+            owner_revenue: split.owner_amount,
             outstanding: outstandingByCar.get(row.id) ?? 0,
           }
         })

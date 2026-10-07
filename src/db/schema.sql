@@ -101,6 +101,29 @@ CREATE TABLE IF NOT EXISTS cars (
 CREATE UNIQUE INDEX IF NOT EXISTS cars_registration_key ON cars (company_id, lower(registration));
 CREATE INDEX IF NOT EXISTS cars_company_status_idx ON cars (company_id, status);
 
+-- ------------------------------------------------- ownership + Zinara licence
+-- A vehicle is either owned outright (`owned`) or taken from a third party on
+-- sub-lease. For a sub-lease the owner's name and the percentage of revenue the
+-- company keeps are recorded, so both sides can be paid their share.
+-- `license_valid_from` / `license_valid_to` drive the dashboard renewal alert.
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS ownership             text        NOT NULL DEFAULT 'owned';
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS owner_first_name      text;
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS owner_last_name       text;
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS company_share_percent numeric(5,2) NOT NULL DEFAULT 100;
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS license_valid_from    date;
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS license_valid_to      date;
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS license_renewed_at    timestamptz;
+
+DO $$ BEGIN
+  ALTER TABLE cars ADD CONSTRAINT cars_ownership_check
+    CHECK (ownership IN ('owned', 'sub_lease'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE cars ADD CONSTRAINT cars_company_share_check
+    CHECK (company_share_percent BETWEEN 0 AND 100);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 -- --------------------------------------------------------------- customers
 CREATE TABLE IF NOT EXISTS customers (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),

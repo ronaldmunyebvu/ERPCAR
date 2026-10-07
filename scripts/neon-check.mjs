@@ -97,8 +97,68 @@ if (company) console.log(`  ✓ companies.get — ${company.name} (${company.cur
   await check('reports.revenue', () => repository.reports.revenue(companyId, range))
   await check('reports.utilization', () => repository.reports.utilization(companyId, range))
   await check('reports.memberActivity', () => repository.reports.memberActivity(companyId, range))
+  await check('reports.fleetPerformance', () => repository.reports.fleetPerformance(companyId, range))
+  await check(
+    'reports.fleetPerformance + ownership filter',
+    () => repository.reports.fleetPerformance(companyId, { ...range, ownership: 'sub_lease' }),
+  )
   await check('activity.list', () => repository.activity.list({ companyId, limit: 20 }))
   await check('activity.list + action filter', () => repository.activity.list({ companyId, action: 'rental' }))
+
+  console.log('\nOwnership + Zinara licence')
+  // One scratch vehicle is created, renewed and removed so the whole licence
+  // round trip runs against the live schema without leaving data behind.
+  let scratch = null
+  try {
+    scratch = await repository.cars.create(
+      {
+        company_id: companyId,
+        make: 'Licence',
+        model: 'Check',
+        year: 2024,
+        registration: 'TST-LIC',
+        color: 'White',
+        category: 'other',
+        daily_rate: 20,
+        status: 'inactive',
+        ownership: 'sub_lease',
+        owner_first_name: 'Check',
+        owner_last_name: 'Script',
+        company_share_percent: 75,
+        license_valid_from: '2026-01-01',
+        license_valid_to: '2026-01-15',
+      },
+      { id: session.id },
+    )
+    console.log(
+      `  ✓ cars.create (sub-lease) — share=${scratch.company_share_percent} owner=${scratch.owner_first_name} ${scratch.owner_last_name}`,
+    )
+  } catch (error) {
+    failures += 1
+    console.log(`  ✗ cars.create (sub-lease) — ${error.message}`)
+  }
+  if (scratch?.id) {
+    await check('cars.renewLicense', async () => {
+      const renewed = await repository.cars.renewLicense(
+        scratch.id,
+        new Date().toISOString().slice(0, 10),
+        { id: session.id },
+      )
+      return {
+        ownership: renewed.ownership,
+        share: renewed.company_share_percent,
+        valid_from: renewed.license_valid_from,
+        valid_to: renewed.license_valid_to,
+      }
+    })
+    await check('reports.dashboard includes the expiry list', async () => {
+      const dash = await repository.reports.dashboard(companyId)
+      const found = (dash.attention.licenses || []).find((car) => car.id === scratch.id)
+      if (!found) throw new Error('scratch vehicle missing from attention.licenses')
+      return { days_left: found.days_left, owner: found.owner }
+    })
+    await check('cars.remove', () => repository.cars.remove(scratch.id, { id: session.id }))
+  }
 
   console.log(failures === 0 ? '\nAll Neon checks passed.\n' : `\n${failures} check(s) failed.\n`)
   process.exit(failures === 0 ? 0 : 1)

@@ -98,6 +98,46 @@ export async function buildSeed() {
     updated_at: addDays(now, -5).toISOString(),
   }))
 
+  // A few vehicles are sub-leased, and their Zinara terms sit on both sides of
+  // the 5-day warning window, so the revenue split and the expiry alert are
+  // both visible before anything is added by hand.
+  const carExtras = {
+    2: {
+      ownership: 'sub_lease',
+      owner_first_name: 'Ronald',
+      owner_last_name: 'Munyebvu',
+      company_share_percent: 70,
+      license_days_left: 3,
+    },
+    5: { license_days_left: 5 },
+    7: {
+      ownership: 'sub_lease',
+      owner_first_name: 'Peter',
+      owner_last_name: 'Sanyatwe',
+      company_share_percent: 65,
+      license_days_left: -2,
+    },
+    10: {
+      ownership: 'sub_lease',
+      owner_first_name: 'Ronald',
+      owner_last_name: 'Munyebvu',
+      company_share_percent: 80,
+      license_days_left: 74,
+    },
+  }
+
+  cars.forEach((car, i) => {
+    const extra = carExtras[i] || {}
+    const daysLeft = extra.license_days_left ?? 46
+    car.ownership = extra.ownership || 'owned'
+    car.owner_first_name = extra.owner_first_name || ''
+    car.owner_last_name = extra.owner_last_name || ''
+    car.company_share_percent = extra.ownership ? extra.company_share_percent : 100
+    car.license_valid_from = toDateInput(addDays(now, daysLeft - 90))
+    car.license_valid_to = toDateInput(addDays(now, daysLeft))
+    car.license_renewed_at = null
+  })
+
   const customerDefs = [
     ['Grace Mutasa', '+263 771 220 145', 'grace.mutasa@example.test', '63-0712345 A', 'DL-88213', '12 Samora Avenue, Harare'],
     ['Peter Ndlovu', '+263 772 998 001', 'pndlovu@example.test', '08-9988776 B', 'DL-77541', '45 Bulawayo Road, Harare'],

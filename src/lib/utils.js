@@ -64,6 +64,12 @@ export function formatNumber(amount) {
 
 export function toDate(value) {
   if (!value) return null
+  // A bare calendar date has no timezone, so it is built in the viewer's
+  // local day rather than parsed as UTC (which shifts the day west of UTC).
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split('-').map(Number)
+    return new Date(year, month - 1, day)
+  }
   const date = value instanceof Date ? value : new Date(value)
   return Number.isNaN(date.getTime()) ? null : date
 }
@@ -158,6 +164,12 @@ export const RENTAL_STATUSES = ['active', 'completed', 'overdue', 'cancelled']
 export const CAR_STATUSES = ['available', 'rented', 'maintenance', 'inactive']
 export const USER_ROLES = ['admin', 'member']
 export const USER_STATUSES = ['active', 'inactive']
+export const FLEET_OWNERSHIP = ['owned', 'sub_lease']
+
+/** Licences at or past this many days left surface on the dashboard. */
+export const LICENSE_WARNING_DAYS = 5
+/** A subscription payment restarts the licence window at this many days. */
+export const LICENSE_RENEWAL_DAYS = 90
 export const PAYMENT_METHODS = [
   'cash',
   'card',
@@ -204,6 +216,54 @@ export function matchesSearch(haystack, term) {
   return String(haystack ?? '')
     .toLowerCase()
     .includes(term.trim().toLowerCase())
+}
+
+/* ------------------------------------------- ownership + Zinara licences */
+
+/** Days until a licence expires; negative once it has, `null` when unrecorded. */
+export function licenseDaysLeft(value, now = new Date()) {
+  const until = toDate(value)
+  if (!until) return null
+  return Math.round((startOfDay(until) - startOfDay(now)) / 86_400_000)
+}
+
+/** `none` | `expired` | `expiring` (within `LICENSE_WARNING_DAYS`) | `valid`. */
+export function licenseState(value, now = new Date()) {
+  const days = licenseDaysLeft(value, now)
+  if (days === null) return { days: null, state: 'none' }
+  if (days < 0) return { days, state: 'expired' }
+  if (days <= LICENSE_WARNING_DAYS) return { days, state: 'expiring' }
+  return { days, state: 'valid' }
+}
+
+/** The sub-lease owner's full name, or `''` for a vehicle the company owns. */
+export function ownerFullName(car) {
+  if (!car || (car.ownership || 'owned') !== 'sub_lease') return ''
+  return [car.owner_first_name, car.owner_last_name].filter(Boolean).join(' ').trim()
+}
+
+/** UI label for an ownership value, defaulting legacy rows to `Owned`. */
+export function ownershipLabel(value) {
+  return value === 'sub_lease' ? 'Sub-lease' : 'Owned'
+}
+
+/** The share of a vehicle's revenue the company keeps; the owner gets the rest. */
+export function companySharePercent(car) {
+  if (!car || (car.ownership || 'owned') !== 'sub_lease') return 100
+  const value = Number(car.company_share_percent)
+  return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0
+}
+
+/** Splits a revenue figure into the company's cut and the owner's cut. */
+export function splitRevenue(revenue, car) {
+  const total = Number(revenue) || 0
+  const companyPercent = companySharePercent(car)
+  return {
+    company_percent: companyPercent,
+    owner_percent: 100 - companyPercent,
+    company_amount: (total * companyPercent) / 100,
+    owner_amount: (total * (100 - companyPercent)) / 100,
+  }
 }
 
 /* ---------------------------------------------------------------- exports */

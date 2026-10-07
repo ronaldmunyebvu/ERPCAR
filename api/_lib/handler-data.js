@@ -18,6 +18,9 @@ let repositoryPromise = null
 const VERSIONED_OPERATIONS = {
   'cars.update': ['cars', 0],
   'cars.remove': ['cars', 0],
+  // A renewal rewrites three date columns on one vehicle, so a stale client
+  // must not be able to silently overwrite a renewal made elsewhere.
+  'cars.renewLicense': ['cars', 0],
   'customers.update': ['customers', 0],
   'customers.remove': ['customers', 0],
   'rentals.update': ['rentals', 0],
