@@ -14,6 +14,7 @@ const RentalDetailPage = lazy(() => import('@/pages/app/RentalDetailPage'))
 const RentalFormPage = lazy(() => import('@/pages/app/RentalFormPage'))
 const RentalsPage = lazy(() => import('@/pages/app/RentalsPage'))
 const ReportsPage = lazy(() => import('@/pages/app/ReportsPage'))
+const ConfirmEmailPage = lazy(() => import('@/pages/auth/ConfirmEmailPage'))
 const ForgotPasswordPage = lazy(() => import('@/pages/auth/ForgotPasswordPage'))
 const LoginPage = lazy(() => import('@/pages/auth/LoginPage'))
 const ResetPasswordPage = lazy(() => import('@/pages/auth/ResetPasswordPage'))
@@ -44,6 +45,15 @@ export default function App() {
         element={
           <RedirectIfAuthenticated>
             <SetupPage />
+          </RedirectIfAuthenticated>
+        }
+      />
+
+      <Route
+        path="/confirm-email"
+        element={
+          <RedirectIfAuthenticated>
+            <ConfirmEmailPage />
           </RedirectIfAuthenticated>
         }
       />

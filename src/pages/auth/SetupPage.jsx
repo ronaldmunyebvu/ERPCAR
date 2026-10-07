@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Building2, Car, Info, UserPlus } from 'lucide-react'
+import { Building2, Car, Info, MailCheck, UserPlus } from 'lucide-react'
 import { getRepository } from '@/db'
 import { useAuth } from '@/context/AuthContext'
 import { Button, Field, Input, Textarea, Select, Alert, Card } from '@/components/ui'
@@ -24,6 +24,7 @@ export default function SetupPage() {
     currency: 'USD',
   })
   const [owner, setOwner] = useState({ full_name: '', email: '', phone: '', password: '', confirm: '' })
+  const [created, setCreated] = useState(null)
 
   const submit = async (event) => {
     event.preventDefault()
@@ -56,12 +57,28 @@ export default function SetupPage() {
     setBusy(true)
     try {
       const repo = await getRepository()
-      await repo.auth.createCompanyWithOwner({ company, owner })
+      const outcome = await repo.auth.createCompanyWithOwner({ company, owner })
+      setCreated(outcome)
+      setStep(3)
+    } catch (cause) {
+      setError(cause.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * The account exists at this point; the confirmation link is a nicety, not a
+   * gate, so the owner can walk straight in with the password they just chose.
+   */
+  const signInNow = async () => {
+    setError(null)
+    setBusy(true)
+    try {
       await signIn({ email: owner.email.trim().toLowerCase(), password: owner.password })
       navigate('/app', { replace: true })
     } catch (cause) {
       setError(cause.message)
-    } finally {
       setBusy(false)
     }
   }
@@ -89,6 +106,7 @@ export default function SetupPage() {
             {[
               ['Company', Building2],
               ['Owner account', UserPlus],
+              ['Confirmation', MailCheck],
             ].map(([label, Icon], index) => {
               const number = index + 1
               const active = step === number
@@ -119,6 +137,54 @@ export default function SetupPage() {
             </Alert>
           )}
 
+          {step === 3 ? (
+            <div className="space-y-4">
+              <span className="grid h-11 w-11 place-items-center rounded-xl bg-brand-50 text-brand-600">
+                <MailCheck size={21} />
+              </span>
+              <div>
+                <h2 className="text-lg font-semibold text-ink-900">Check your email</h2>
+                <p className="mt-1 text-sm text-ink-500">
+                  A confirmation link is on its way to <strong>{owner.email}</strong>. Opening it
+                  confirms your address and signs you straight in. The link works once and expires
+                  after 24 hours.
+                </p>
+              </div>
+
+              {created?.email_sent === false && created?.confirmation_token ? (
+                <Card className="border-dashed p-4">
+                  <p className="text-xs font-semibold text-ink-700">
+                    No mail server was reachable — open the link directly:
+                  </p>
+                  <p className="mt-2 break-all rounded-lg bg-ink-950 px-3 py-2 font-mono text-[11px] leading-relaxed text-emerald-300">
+                    /confirm-email?token={created.confirmation_token}
+                  </p>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => navigate(`/confirm-email?token=${created.confirmation_token}`)}
+                  >
+                    Open the confirmation link
+                  </Button>
+                </Card>
+              ) : (
+                <Alert tone="info" icon={Info} title="No need to wait">
+                  Your account is already active, so you can sign in with your password whenever
+                  you like — the email is simply there to confirm the address.
+                </Alert>
+              )}
+
+              <div className="flex justify-between gap-2 pt-2">
+                <Button variant="secondary" onClick={() => navigate('/login')} disabled={busy}>
+                  Go to sign in
+                </Button>
+                <Button onClick={signInNow} loading={busy}>
+                  Sign in now
+                </Button>
+              </div>
+            </div>
+          ) : (
           <form onSubmit={submit} className="space-y-4">
             {step === 1 ? (
               <>
@@ -256,6 +322,7 @@ export default function SetupPage() {
               </Button>
             </div>
           </form>
+          )}
         </Card>
       </div>
     </div>

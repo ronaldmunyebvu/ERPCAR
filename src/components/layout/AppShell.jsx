@@ -152,6 +152,10 @@ function SidebarContent({ onNavigate }) {
             Sign out
           </button>
         </div>
+        <p className="mt-2 px-1 text-center text-[10px] leading-relaxed tracking-wide text-ink-500">
+          Powered by Skyro Consultancy
+          <span className="block text-ink-600">A member of Disafrika Group</span>
+        </p>
         {dataSource === 'mock' && (
           <p className="mt-2 rounded-md bg-amber-400/10 px-2 py-1.5 text-[10px] leading-relaxed text-amber-300">
             Demo mode — data is stored in this browser only.

@@ -7,7 +7,7 @@
  * the stored PBKDF2 hashes valid - the format has not changed, only the side
  * that computes it.
  */
-import { hashPassword, verifyPassword, randomToken } from '../../lib/crypto.js'
+import { hashPassword, verifyPassword, randomToken, randomDigits } from '../../lib/crypto.js'
 import {
   isOverdue,
   rentalTotal,
@@ -96,8 +96,11 @@ function filters() {
  * @param {string} connectionString - the pooled Postgres URL
  * @param {{ query(text: string, params?: unknown[]): Promise<unknown> }} sql -
  *   the executor to run statements through, normally supplied by `api/_lib/db.js`
+ * @param {{ confirmation(msg): Promise<boolean>, resetCode(msg): Promise<boolean> }} [mail] -
+ *   outgoing mail handle from `api/_lib/mailer.js`; omitted means nothing is
+ *   ever sent, which is how the verification scripts run.
  */
-export async function createNeonRepository(connectionString, sql) {
+export async function createNeonRepository(connectionString, sql, mail = null) {
   if (!connectionString) {
     throw new Error(
       'No database connection string was supplied to the repository. Set DATABASE_URL in the Vercel project environment variables.',
@@ -140,6 +143,45 @@ export async function createNeonRepository(connectionString, sql) {
         JSON.stringify(entry.metadata ?? {}),
       ],
     )
+  }
+
+  /**
+   * Hands a message to the mail server, reporting whether it actually went.
+   * A transport that is missing or unhappy is never allowed to fail the write
+   * that triggered it — callers fall back to showing the secret on screen.
+   */
+  async function deliver(kind, payload) {
+    if (!mail || typeof mail[kind] !== 'function') return false
+    try {
+      return Boolean(await mail[kind](payload))
+    } catch (error) {
+      console.error('[mail] delivery failed', error?.message)
+      return false
+    }
+  }
+
+  /**
+   * Stores a single-use credential for a user.
+   *
+   * `token_hash` is unique, so when two accounts draw the same six digit code
+   * the loser of the race simply draws another rather than failing the whole
+   * request. `makeSecret` is called again for each attempt.
+   */
+  async function storeCredential(userId, purpose, ttlMinutes, makeSecret) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const secret = makeSecret()
+      try {
+        await rows(
+          `INSERT INTO password_resets (user_id, token_hash, expires_at, purpose)
+           VALUES ($1, $2, now() + make_interval(mins => $3::int), $4)`,
+          [userId, secret, ttlMinutes, purpose],
+        )
+        return secret
+      } catch (error) {
+        if (error?.code !== '23505') throw error
+      }
+    }
+    throw new Error('Could not issue a security code. Please try again.')
   }
 
   function decorateRental(rental) {
@@ -289,7 +331,21 @@ export async function createNeonRepository(connectionString, sql) {
             await hashPassword(owner.password),
           ],
         )
-        return user
+        // Proof of the address: emailed as a link that signs the new owner in.
+        const token = await storeCredential(user.id, 'email_confirm', 60 * 24, () => randomToken())
+        const delivered = await deliver('confirmation', {
+          to: user.email,
+          name: user.full_name,
+          company: created.name,
+          token,
+        })
+        return {
+          ...user,
+          email_sent: delivered,
+          // Handed back only when the mail server did not take it, so the
+          // person setting up the company can still finish from this screen.
+          confirmation_token: delivered ? null : token,
+        }
       },
 
       async signIn({ email, password }) {
@@ -320,6 +376,49 @@ export async function createNeonRepository(connectionString, sql) {
       },
 
       async signOut() {},
+
+      /**
+       * Redeems the emailed sign-in link issued at company creation.
+       *
+       * Single use and time limited: the credential is marked spent in the same
+       * breath as the session it produces, so a copy of the link from an inbox
+       * is worthless after the first click.
+       */
+      async confirmEmail(token) {
+        const secret = String(token || '')
+        const credential = secret
+          ? await one(
+              `SELECT * FROM password_resets
+                WHERE token_hash = $1 AND purpose = 'email_confirm'
+                  AND used_at IS NULL AND expires_at > now()`,
+              [secret],
+            )
+          : null
+        if (!credential) {
+          throw new Error('This confirmation link is invalid or has expired. Please sign in instead.')
+        }
+        const user = await one(
+          `SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE id = $1`,
+          [credential.user_id],
+        )
+        if (!user || user.status !== 'active') {
+          throw new Error('This confirmation link is invalid or has expired. Please sign in instead.')
+        }
+        await rows('UPDATE password_resets SET used_at = now() WHERE id = $1', [credential.id])
+        await rows('UPDATE users SET last_login_at = now(), updated_at = now() WHERE id = $1', [
+          user.id,
+        ])
+        const company = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
+        await logActivity({
+          company_id: user.company_id,
+          user_id: user.id,
+          action: 'auth.email_confirmed',
+          entity: 'user',
+          entity_id: user.id,
+          summary: `${user.full_name} confirmed their email address`,
+        })
+        return { user, company }
+      },
 
       async findUserById(id) {
         const user = await one(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE id = $1`, [id])
@@ -464,35 +563,99 @@ export async function createNeonRepository(connectionString, sql) {
         return { removed: true, hardDeleted }
       },
 
+      /**
+       * Starts a password reset by emailing a six digit code.
+       *
+       * The response is identical whether or not the address exists — the code
+       * itself is stripped by the caller's guard in production, and here it is
+       * returned only so a build with no mail server can still show it.
+       * Requesting a new code kills the one still outstanding, so a leaked
+       * older code stops working the moment a fresh one is asked for.
+       */
       async requestPasswordReset(email) {
         const user = await one('SELECT * FROM users WHERE lower(email) = lower($1)', [
           String(email).trim(),
         ])
         if (!user) return { ok: true, token: null, user: null, email: String(email).trim().toLowerCase() }
-        const token = randomToken()
         await rows(
-          `INSERT INTO password_resets (user_id, token_hash, expires_at)
-           VALUES ($1,$2, now() + interval '1 day')`,
-          [user.id, token],
+          `UPDATE password_resets SET used_at = now()
+            WHERE user_id = $1 AND purpose = 'password_reset' AND used_at IS NULL`,
+          [user.id],
         )
+        const code = await storeCredential(user.id, 'password_reset', 10, () => randomDigits(6))
+        await deliver('resetCode', { to: user.email, name: user.full_name, code })
         const { password_hash, ...safe } = user
         void password_hash
-        return { ok: true, token, user: safe, email: user.email }
+        return { ok: true, token: code, user: safe, email: user.email }
       },
 
-      async completePasswordReset({ token, password }) {
-        const reset = await one(
-          `SELECT * FROM password_resets
-           WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()`,
-          [token],
-        )
-        if (!reset) throw new Error('This reset link is invalid or has expired. Please request a new one.')
+      /**
+       * Finishes a reset. `email` scopes the check to that account's live code
+       * so wrong guesses can be counted and the code killed after five — a six
+       * digit code that could be tried unlimited times is no defence at all.
+       * Omitting `email` keeps the link-shaped path working for old emails.
+       */
+      async completePasswordReset({ token, password, email }) {
+        const secret = String(token ?? '')
+        if (String(password || '').length < 8) {
+          throw new Error('Choose a password with at least 8 characters.')
+        }
+
+        let reset = null
+        if (email) {
+          const owner = await one('SELECT id FROM users WHERE lower(email) = lower($1)', [
+            String(email).trim(),
+          ])
+          reset = owner
+            ? await one(
+                `SELECT * FROM password_resets
+                  WHERE user_id = $1 AND purpose = 'password_reset'
+                    AND used_at IS NULL AND expires_at > now()
+                  ORDER BY created_at DESC LIMIT 1`,
+                [owner.id],
+              )
+            : null
+          if (reset) {
+            if (num(reset.attempts) >= 5) {
+              await rows('UPDATE password_resets SET used_at = now() WHERE id = $1', [reset.id])
+              throw new Error('Too many attempts. Please request a new code.')
+            }
+            if (reset.token_hash !== secret) {
+              const attempts = num(reset.attempts) + 1
+              await rows(
+                `UPDATE password_resets SET attempts = $2, used_at = CASE WHEN $2 >= 5 THEN now() ELSE used_at END
+                  WHERE id = $1`,
+                [reset.id, attempts],
+              )
+              throw new Error(
+                attempts >= 5
+                  ? 'Too many attempts. Please request a new code.'
+                  : 'That code is incorrect. Please try again.',
+              )
+            }
+          }
+        } else {
+          reset = await one(
+            `SELECT * FROM password_resets
+              WHERE token_hash = $1 AND purpose = 'password_reset'
+                AND used_at IS NULL AND expires_at > now()`,
+            [secret],
+          )
+        }
+        if (!reset) {
+          throw new Error('This reset code is invalid or has expired. Please request a new one.')
+        }
+
         const user = await one(
           `UPDATE users SET password_hash = $2, updated_at = now()
            WHERE id = $1 RETURNING ${PUBLIC_USER_COLUMNS}`,
           [reset.user_id, await hashPassword(password)],
         )
-        await rows('UPDATE password_resets SET used_at = now() WHERE id = $1', [reset.id])
+        await rows(
+          `UPDATE password_resets SET used_at = now()
+            WHERE user_id = $1 AND purpose = 'password_reset' AND used_at IS NULL`,
+          [reset.user_id],
+        )
         await logActivity({
           company_id: user.company_id,
           user_id: user.id,

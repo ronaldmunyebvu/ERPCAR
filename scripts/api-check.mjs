@@ -10,6 +10,11 @@ import dataHandler from '../api/_lib/handler-data.js'
 import { query, one } from '../api/_lib/db.js'
 import { OPERATIONS } from '../src/db/operations.js'
 
+// This script calls the reset operation several times against the real
+// database. Without the switch every call would put a live email in the
+// owner's inbox, so delivery is switched off for the duration.
+process.env.MAILER_DISABLE = 'true'
+
 let passed = 0
 let failed = 0
 
@@ -80,6 +85,97 @@ if (!real.cookie) {
   // The owner password is not in the environment, so read it from the prompt
   // is not possible here. Fall back to asserting unauthenticated behaviour.
   console.log('  skip  owner password unavailable (set OWNER_PASSWORD to test authenticated paths)')
+}
+
+/* ------------------------------------------------- public endpoint guards */
+console.log('\nPublic endpoint guards')
+const setup = await invoke(authHandler, {
+  action: 'setup',
+  company: { name: 'Attacker Co' },
+  owner: { full_name: 'Attacker', email: 'attacker@example.test', password: 'password123' },
+})
+check('setup is refused once a company exists', setup.statusCode >= 400, setup.json?.error)
+
+const reset = await invoke(dataHandler, {
+  operation: 'auth.requestPasswordReset',
+  args: [owner.email],
+})
+// The guard is read from the environment at call time, so the production
+// behaviour can be asserted directly rather than inferred from whatever the
+// local .env happens to say.
+const savedFlag = process.env.EXPOSE_RESET_TOKEN
+const savedEnv = process.env.NODE_ENV
+try {
+  delete process.env.EXPOSE_RESET_TOKEN
+  process.env.NODE_ENV = 'production'
+  const hidden = await invoke(dataHandler, {
+    operation: 'auth.requestPasswordReset',
+    args: [owner.email],
+  })
+  check(
+    'reset token is withheld in production',
+    hidden.json?.data?.token === null,
+    hidden.json?.data?.token ? 'token leaked' : 'no token returned',
+  )
+  check('reset still confirms the address', Boolean(hidden.json?.data?.email))
+  check('reset does not reveal whether the account exists', hidden.json?.data?.user === null, hidden.json?.data?.user ? 'user record returned' : 'no user record')
+  // Only the shape must match; the address echoed back is the caller's own
+  // input, so comparing that would be comparing two different inputs.
+  const shape = (value) => JSON.stringify(Object.keys(value || {}).sort())
+  const unknownAddr = await invoke(dataHandler, {
+    operation: 'auth.requestPasswordReset',
+    args: ['nobody-at-all@example.test'],
+  })
+  check(
+    'unknown and known addresses are indistinguishable',
+    shape(hidden.json?.data) === shape(unknownAddr.json?.data) &&
+      hidden.json?.data?.user === unknownAddr.json?.data?.user,
+    'same fields, same nulls either way',
+  )
+
+  process.env.EXPOSE_RESET_TOKEN = 'true'
+  const exposed = await invoke(dataHandler, {
+    operation: 'auth.requestPasswordReset',
+    args: [owner.email],
+  })
+  check(
+    'reset token is returned when explicitly enabled',
+    typeof exposed.json?.data?.token === 'string',
+  )
+  check(
+    'reset token is a six digit code',
+    /^\d{6}$/.test(exposed.json?.data?.token || ''),
+    exposed.json?.data?.token || 'no code',
+  )
+
+  // A code that is certainly not the live one: one digit away, so the check
+  // cannot be defeated by the astronomically unlikely guess matching.
+  const wrongCode = String((Number(exposed.json?.data?.token) + 1) % 1000000).padStart(6, '0')
+  const rejected = await invoke(dataHandler, {
+    operation: 'auth.completePasswordReset',
+    args: [{ token: wrongCode, password: 'wrong-code-only', email: owner.email }],
+  })
+  check(
+    'a wrong reset code is refused',
+    rejected.statusCode >= 400 && rejected.statusCode < 500,
+    rejected.json?.error,
+  )
+
+  const bogusLink = await invoke(authHandler, {
+    action: 'confirmEmail',
+    token: 'not-a-real-confirmation-token',
+  })
+  check(
+    'an unknown confirmation link is refused',
+    bogusLink.statusCode >= 400 && bogusLink.statusCode < 500,
+    bogusLink.json?.error,
+  )
+  check('a refused confirmation link signs nobody in', !bogusLink.json?.account)
+} finally {
+  if (savedFlag === undefined) delete process.env.EXPOSE_RESET_TOKEN
+  else process.env.EXPOSE_RESET_TOKEN = savedFlag
+  if (savedEnv === undefined) delete process.env.NODE_ENV
+  else process.env.NODE_ENV = savedEnv
 }
 
 if (real.cookie) {
@@ -177,68 +273,6 @@ if (real.cookie) {
 
   const schemaIntact = await one('SELECT count(*)::int AS count FROM cars')
   check('cars table still populated', schemaIntact.count > 0, `${schemaIntact.count} cars`)
-
-  /* ------------------------------------------------- public endpoint guards */
-  console.log('\nPublic endpoint guards')
-  const setup = await invoke(authHandler, {
-    action: 'setup',
-    company: { name: 'Attacker Co' },
-    owner: { full_name: 'Attacker', email: 'attacker@example.test', password: 'password123' },
-  })
-  check('setup is refused once a company exists', setup.statusCode >= 400, setup.json?.error)
-
-  const reset = await invoke(dataHandler, {
-    operation: 'auth.requestPasswordReset',
-    args: [owner.email],
-  })
-  // The guard is read from the environment at call time, so the production
-  // behaviour can be asserted directly rather than inferred from whatever the
-  // local .env happens to say.
-  const savedFlag = process.env.EXPOSE_RESET_TOKEN
-  const savedEnv = process.env.NODE_ENV
-  try {
-    delete process.env.EXPOSE_RESET_TOKEN
-    process.env.NODE_ENV = 'production'
-    const hidden = await invoke(dataHandler, {
-      operation: 'auth.requestPasswordReset',
-      args: [owner.email],
-    })
-    check(
-      'reset token is withheld in production',
-      hidden.json?.data?.token === null,
-      hidden.json?.data?.token ? 'token leaked' : 'no token returned',
-    )
-    check('reset still confirms the address', Boolean(hidden.json?.data?.email))
-    check('reset does not reveal whether the account exists', hidden.json?.data?.user === null, hidden.json?.data?.user ? 'user record returned' : 'no user record')
-    // Only the shape must match; the address echoed back is the caller's own
-    // input, so comparing that would be comparing two different inputs.
-    const shape = (value) => JSON.stringify(Object.keys(value || {}).sort())
-    const unknownAddr = await invoke(dataHandler, {
-      operation: 'auth.requestPasswordReset',
-      args: ['nobody-at-all@example.test'],
-    })
-    check(
-      'unknown and known addresses are indistinguishable',
-      shape(hidden.json?.data) === shape(unknownAddr.json?.data) &&
-        hidden.json?.data?.user === unknownAddr.json?.data?.user,
-      'same fields, same nulls either way',
-    )
-
-    process.env.EXPOSE_RESET_TOKEN = 'true'
-    const exposed = await invoke(dataHandler, {
-      operation: 'auth.requestPasswordReset',
-      args: [owner.email],
-    })
-    check(
-      'reset token is returned when explicitly enabled',
-      typeof exposed.json?.data?.token === 'string',
-    )
-  } finally {
-    if (savedFlag === undefined) delete process.env.EXPOSE_RESET_TOKEN
-    else process.env.EXPOSE_RESET_TOKEN = savedFlag
-    if (savedEnv === undefined) delete process.env.NODE_ENV
-    else process.env.NODE_ENV = savedEnv
-  }
 
   /* ------------------------------------------------------------ sign out */
   console.log('\nSign out')

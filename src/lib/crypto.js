@@ -98,3 +98,22 @@ export async function verifyToken(token, secret) {
 export function randomToken(bytes = 24) {
   return bytesToB64Url(crypto.getRandomValues(new Uint8Array(bytes)))
 }
+
+/**
+ * Unbiased decimal one-time code (the emailed password-reset PIN).
+ *
+ * Bytes are only used while they fall in a whole number of tens, so no digit is
+ * more likely than another; the rejects are simply redrawn.
+ */
+export function randomDigits(length = 6) {
+  let code = ''
+  while (code.length < length) {
+    const batch = crypto.getRandomValues(new Uint8Array(length))
+    for (const byte of batch) {
+      if (byte >= 250) continue // 250 is the largest multiple of 10 below 256
+      code += String(byte % 10)
+      if (code.length === length) break
+    }
+  }
+  return code
+}

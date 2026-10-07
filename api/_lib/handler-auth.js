@@ -1,6 +1,7 @@
 import { createNeonRepository } from '../../src/db/neon/repo.neon.js'
 import { connectionString, query } from './db.js'
 import { currentSession, issueSession } from './auth.js'
+import { mail } from './mailer.js'
 import {
   SESSION_COOKIE,
   clearSessionCookie,
@@ -24,7 +25,7 @@ let repositoryPromise = null
 
 function repository() {
   if (!repositoryPromise) {
-    repositoryPromise = createNeonRepository(connectionString(), { query }).catch((error) => {
+    repositoryPromise = createNeonRepository(connectionString(), { query }, mail).catch((error) => {
       repositoryPromise = null
       throw error
     })
@@ -91,6 +92,29 @@ const ACTIONS = {
   async signOut() {
     // The handler replaces this with an expired cookie.
     return {}
+  },
+
+  /**
+   * Redeems the one-time link emailed when a car rental is created.
+   *
+   * The link is the proof of ownership of the address, so redeeming it both
+   * marks the address confirmed and signs the owner in — the reason a new
+   * account exists in the first place.
+   */
+  async confirmEmail(repo, _session, payload, event) {
+    const token = String(payload.token || '').trim()
+    if (!token) throw new ApiError('This confirmation link is missing its token.')
+
+    const account = await repo.auth.confirmEmail(token)
+    const { token: jwt, maxAge } = issueSession({
+      userId: account.user.id,
+      companyId: account.company.id,
+      role: account.user.role,
+    })
+    return {
+      account: publicAccount(account.user, account.company),
+      cookie: sessionCookie(event, jwt, maxAge),
+    }
   },
 
   /** First-run provisioning. Refused once a company exists. */

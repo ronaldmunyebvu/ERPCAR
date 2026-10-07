@@ -1,6 +1,7 @@
 import { createNeonRepository } from '../../src/db/neon/repo.neon.js'
 import { OPERATIONS } from '../../src/db/operations.js'
 import { connectionString, one, query } from './db.js'
+import { mail } from './mailer.js'
 import { currentSession } from './auth.js'
 import { SESSION_COOKIE, fail, json, parseCookies, readBody } from './http.js'
 import { ApiError, resolveCall, sanitizeArgs } from './scope.js'
@@ -32,7 +33,7 @@ const VERSIONED_OPERATIONS = {
 
 function repository() {
   if (!repositoryPromise) {
-    repositoryPromise = createNeonRepository(connectionString(), { query }).catch((error) => {
+    repositoryPromise = createNeonRepository(connectionString(), { query }, mail).catch((error) => {
       repositoryPromise = null
       throw error
     })
@@ -40,13 +41,19 @@ function repository() {
   return repositoryPromise
 }
 
-/** Error messages that describe our own state are safe to show; SQL is not. */
+/**
+ * Ordinary user mistakes — a wrong reset code, a stale link, a duplicate
+ * address — are safe to show and belong with a 4xx, because they describe
+ * what the caller did rather than what broke. Anything else is logged and
+ * replaced with a generic message, so a query, a hostname or a column name
+ * can never reach the browser.
+ */
+const USER_FAULT = /not found|already|invalid|incorrect|expired|attempt|must be|password|email|account|admin|permission|set up|json/i
+
 function safeMessage(error) {
   if (error instanceof ApiError) return error.message
   const text = String(error?.message || '')
-  if (/not found|already|invalid|must be|password|email|account|admin|permission|set up|json/i.test(text)) {
-    return text
-  }
+  if (USER_FAULT.test(text)) return text
   console.error('[api/data]', error)
   return 'The request could not be completed.'
 }
@@ -117,7 +124,12 @@ export default async function handler(event) {
 
     return json({ data: payload ?? null })
   } catch (error) {
-    const status = error instanceof ApiError ? error.statusCode : 500
+    const status =
+      error instanceof ApiError
+        ? error.statusCode
+        : USER_FAULT.test(String(error?.message || ''))
+        ? 400
+        : 500
     return fail(safeMessage(error), status)
   }
 }

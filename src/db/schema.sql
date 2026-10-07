@@ -80,6 +80,26 @@ CREATE TABLE IF NOT EXISTS password_resets (
 
 CREATE INDEX IF NOT EXISTS password_resets_user_idx ON password_resets (user_id);
 
+-- What the credential is for: the emailed sign-in link for a new account is
+-- not a password reset, and the two must never be accepted interchangeably.
+-- `attempts` counts wrong codes so a six digit OTP cannot be guessed online.
+ALTER TABLE password_resets ADD COLUMN IF NOT EXISTS purpose text        NOT NULL DEFAULT 'password_reset';
+ALTER TABLE password_resets ADD COLUMN IF NOT EXISTS attempts integer   NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS password_resets_live_idx
+  ON password_resets (user_id, purpose, created_at DESC);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'password_resets_purpose_check'
+  ) THEN
+    ALTER TABLE password_resets
+      ADD CONSTRAINT password_resets_purpose_check
+      CHECK (purpose IN ('password_reset', 'email_confirm'));
+  END IF;
+END $$;
+
 -- -------------------------------------------------------------------- cars
 CREATE TABLE IF NOT EXISTS cars (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),

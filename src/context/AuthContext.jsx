@@ -92,19 +92,13 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  const signIn = useCallback(async (credentials) => {
-    const account = isLiveMode()
-      ? await authApi.signIn(credentials.email, credentials.password)
-      : await getRepository().then(async (repo) => {
-          const found = await repo.auth.signIn(credentials)
-          const token = await signToken(
-            { userId: found.user.id, companyId: found.company.id, role: found.user.role },
-            MOCK_SECRET,
-          )
-          sessionStorage.setItem(SESSION_KEY, token)
-          localStorage.setItem(SESSION_KEY, token)
-          return found
-        })
+  /**
+   * Puts a freshly issued account into state and warms the offline cache.
+   *
+   * Every path that ends a login — password, confirmation link — finishes here
+   * so none of them can leave the session half-built.
+   */
+  const adopt = useCallback((account) => {
     if (isLiveMode()) {
       saveOfflineAccount(account)
       getRepository()
@@ -115,6 +109,48 @@ export function AuthProvider({ children }) {
     setCompany(account.company)
     return account.user
   }, [])
+
+  const signIn = useCallback(
+    async (credentials) => {
+      const account = isLiveMode()
+        ? await authApi.signIn(credentials.email, credentials.password)
+        : await getRepository().then(async (repo) => {
+            const found = await repo.auth.signIn(credentials)
+            const token = await signToken(
+              { userId: found.user.id, companyId: found.company.id, role: found.user.role },
+              MOCK_SECRET,
+            )
+            sessionStorage.setItem(SESSION_KEY, token)
+            localStorage.setItem(SESSION_KEY, token)
+            return found
+          })
+      return adopt(account)
+    },
+    [adopt],
+  )
+
+  /**
+   * Redeems the one-time link emailed when a company is created.
+   *
+   * The server treats a valid link as proof of the address and signs the owner
+   * in with it, so this finishes exactly like a password sign-in.
+   */
+  const confirmEmail = useCallback(
+    async (confirmationToken) => {
+      if (isLiveMode()) return adopt(await authApi.confirmEmail(confirmationToken))
+      const account = await getRepository().then((repo) =>
+        repo.auth.confirmEmail(confirmationToken),
+      )
+      const token = await signToken(
+        { userId: account.user.id, companyId: account.company.id, role: account.user.role },
+        MOCK_SECRET,
+      )
+      sessionStorage.setItem(SESSION_KEY, token)
+      localStorage.setItem(SESSION_KEY, token)
+      return adopt(account)
+    },
+    [adopt],
+  )
 
   const signOut = useCallback(async () => {
     if (isLiveMode()) await authApi.signOut().catch(() => {})
@@ -148,11 +184,12 @@ export function AuthProvider({ children }) {
       isAdmin: user?.role === 'admin',
       isMember: user?.role === 'member',
       signIn,
+      confirmEmail,
       signOut,
       refresh,
       clearError: () => setError(null),
     }),
-    [user, company, ready, error, signIn, signOut, refresh],
+    [user, company, ready, error, signIn, confirmEmail, signOut, refresh],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

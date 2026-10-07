@@ -62,6 +62,17 @@ export async function setupWorkspace({ company, owner }) {
   return result?.account ?? null
 }
 
+/**
+ * Redeems the emailed confirmation link.
+ *
+ * Returns the account: the server marks the address confirmed and sets the
+ * session cookie in the same response.
+ */
+export async function confirmEmail(token) {
+  const result = await call('confirmEmail', { token })
+  return result?.account ?? null
+}
+
 export async function isSetupComplete() {
   const repo = (await import('../index')).getRepository()
   return repo.auth.isSetupComplete()

@@ -1,6 +1,6 @@
 import { loadDatabase, commit, resetDatabase, onDatabaseChange, exportDatabase } from './store'
 import { buildSeed } from './seed'
-import { hashPassword, verifyPassword, randomToken } from '@/lib/crypto'
+import { hashPassword, verifyPassword, randomToken, randomDigits } from '@/lib/crypto'
 import {
   uid,
   isOverdue,
@@ -222,8 +222,26 @@ export function createMockRepository() {
           updated_at: timestamp,
         })
 
+        const confirmToken = randomToken()
+        data.password_resets.push({
+          id: uid('prs_'),
+          user_id: ownerId,
+          token: confirmToken,
+          purpose: 'email_confirm',
+          attempts: 0,
+          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          used_at: null,
+          created_at: timestamp,
+        })
+
         commit()
-        return publicUser(data.users.find((user) => user.id === ownerId))
+        return {
+          ...publicUser(data.users.find((user) => user.id === ownerId)),
+          // Demo mode has no mail server: the link is handed back so the
+          // setup screen can offer it directly.
+          email_sent: false,
+          confirmation_token: confirmToken,
+        }
       },
 
       async signIn({ email, password }) {
@@ -251,6 +269,45 @@ export function createMockRepository() {
       },
 
       async signOut() {},
+
+      /**
+       * Redeems the emailed sign-in link issued at company creation.
+       *
+       * Single use and time limited, exactly as on the server, so the demo
+       * behaves the way production does.
+       */
+      async confirmEmail(token) {
+        const data = await db()
+        const secret = String(token || '')
+        const credential = (data.password_resets || []).find(
+          (item) =>
+            item.token === secret &&
+            item.purpose === 'email_confirm' &&
+            !item.used_at &&
+            toDate(item.expires_at) > new Date(),
+        )
+        if (!credential) {
+          throw new Error('This confirmation link is invalid or has expired. Please sign in instead.')
+        }
+        const user = data.users.find((item) => item.id === credential.user_id)
+        if (!user || user.status !== 'active') {
+          throw new Error('This confirmation link is invalid or has expired. Please sign in instead.')
+        }
+        credential.used_at = new Date().toISOString()
+        user.last_login_at = credential.used_at
+        user.updated_at = credential.used_at
+        const company = data.companies.find((item) => item.id === user.company_id)
+        logActivity(data, {
+          company_id: user.company_id,
+          user_id: user.id,
+          action: 'auth.email_confirmed',
+          entity: 'user',
+          entity_id: user.id,
+          summary: `${user.full_name} confirmed their email address`,
+        })
+        commit()
+        return { user: publicUser(user), company: clone(company) }
+      },
 
       async findUserById(id) {
         const data = await db()
@@ -365,6 +422,13 @@ export function createMockRepository() {
         return { removed: true, hardDeleted }
       },
 
+      /**
+       * Starts a password reset by issuing a six digit code.
+       *
+       * Demo mode has no mail server, so the code is returned for the reset
+       * screen to show — the production path returns it too, but the API
+       * strips it before the browser ever sees it.
+       */
       async requestPasswordReset(email) {
         const data = await db()
         const user = data.users.find(
@@ -373,30 +437,97 @@ export function createMockRepository() {
         if (!user) {
           return { ok: true, token: null, user: null, email: String(email).trim().toLowerCase() }
         }
-        const token = randomToken()
         data.password_resets = data.password_resets || []
+        // Only the newest code works: asking again retires the previous one.
+        for (const item of data.password_resets) {
+          if (item.user_id === user.id && (item.purpose || 'password_reset') === 'password_reset' && !item.used_at) {
+            item.used_at = new Date().toISOString()
+          }
+        }
+        const code = randomDigits(6)
         data.password_resets.push({
           id: uid('prs_'),
           user_id: user.id,
-          token,
-          expires_at: addDays(new Date(), 1).toISOString(),
+          token: code,
+          purpose: 'password_reset',
+          attempts: 0,
+          expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
           used_at: null,
           created_at: new Date().toISOString(),
         })
         commit()
-        return { ok: true, token, user: publicUser(user), email: user.email }
+        return { ok: true, token: code, user: publicUser(user), email: user.email }
       },
 
-      async completePasswordReset({ token, password }) {
+      /**
+       * Finishes a reset. Supplying `email` scopes the check to that account's
+       * live code so wrong guesses are counted and the code is killed after
+       * five; leaving it out keeps link-shaped resets working.
+       */
+      async completePasswordReset({ token, password, email }) {
         const data = await db()
-        const reset = (data.password_resets || []).find(
-          (item) => item.token === token && !item.used_at && toDate(item.expires_at) > new Date(),
-        )
-        if (!reset) throw new Error('This reset link is invalid or has expired. Please request a new one.')
+        const secret = String(token ?? '')
+        if (String(password || '').length < 8) {
+          throw new Error('Choose a password with at least 8 characters.')
+        }
+
+        const live = data.password_resets || []
+        const purpose = (item) => item.purpose || 'password_reset'
+        let reset = null
+        if (email) {
+          const owner = data.users.find(
+            (item) => item.email.toLowerCase() === String(email).trim().toLowerCase(),
+          )
+          reset = owner
+            ? live
+                .filter(
+                  (item) =>
+                    item.user_id === owner.id &&
+                    purpose(item) === 'password_reset' &&
+                    !item.used_at &&
+                    toDate(item.expires_at) > new Date(),
+                )
+                .sort((a, b) => toDate(b.created_at) - toDate(a.created_at))[0] || null
+            : null
+          if (reset) {
+            if (reset.attempts >= 5) {
+              reset.used_at = new Date().toISOString()
+              commit()
+              throw new Error('Too many attempts. Please request a new code.')
+            }
+            if (reset.token !== secret) {
+              reset.attempts = (reset.attempts || 0) + 1
+              if (reset.attempts >= 5) reset.used_at = new Date().toISOString()
+              commit()
+              throw new Error(
+                reset.attempts >= 5
+                  ? 'Too many attempts. Please request a new code.'
+                  : 'That code is incorrect. Please try again.',
+              )
+            }
+          }
+        } else {
+          reset =
+            live.find(
+              (item) =>
+                item.token === secret &&
+                purpose(item) === 'password_reset' &&
+                !item.used_at &&
+                toDate(item.expires_at) > new Date(),
+            ) || null
+        }
+        if (!reset) {
+          throw new Error('This reset code is invalid or has expired. Please request a new one.')
+        }
+
         const user = assertFound(data.users.find((item) => item.id === reset.user_id), 'User')
         user.password_hash = await hashPassword(password)
         user.updated_at = new Date().toISOString()
-        reset.used_at = new Date().toISOString()
+        for (const item of live) {
+          if (item.user_id === user.id && purpose(item) === 'password_reset' && !item.used_at) {
+            item.used_at = user.updated_at
+          }
+        }
         logActivity(data, {
           company_id: user.company_id,
           user_id: user.id,
