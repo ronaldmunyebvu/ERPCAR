@@ -19,6 +19,20 @@ export function getSnapshot() {
   return cache
 }
 
+export function hydrateDatabase(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.companies) || !Array.isArray(snapshot.users)) {
+    throw new Error('The server returned an invalid offline data snapshot.')
+  }
+  cache = structuredClone(snapshot)
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(cache))
+  emit()
+  return cache
+}
+
+export function hasStoredDatabase() {
+  return Boolean(localStorage.getItem(STORAGE_KEY))
+}
+
 export async function loadDatabase({ force = false } = {}) {
   if (cache && !force) return cache
   if (loading) return loading

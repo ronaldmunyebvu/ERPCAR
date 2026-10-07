@@ -1,22 +1,23 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { AppShell } from '@/components/layout/AppShell'
 import { RequireAuth, RedirectIfAuthenticated, NotFound } from '@/components/layout/Guards'
-import AccountPage from '@/pages/app/AccountPage'
-import ActivityPage from '@/pages/app/ActivityPage'
-import CompanyPage from '@/pages/app/CompanyPage'
-import CustomersPage from '@/pages/app/CustomersPage'
-import DashboardPage from '@/pages/app/DashboardPage'
-import FleetPage from '@/pages/app/FleetPage'
-import MembersPage from '@/pages/app/MembersPage'
-import PaymentsPage from '@/pages/app/PaymentsPage'
-import RentalDetailPage from '@/pages/app/RentalDetailPage'
-import RentalFormPage from '@/pages/app/RentalFormPage'
-import RentalsPage from '@/pages/app/RentalsPage'
-import ReportsPage from '@/pages/app/ReportsPage'
-import ForgotPasswordPage from '@/pages/auth/ForgotPasswordPage'
-import LoginPage from '@/pages/auth/LoginPage'
-import ResetPasswordPage from '@/pages/auth/ResetPasswordPage'
-import SetupPage from '@/pages/auth/SetupPage'
+const AccountPage = lazy(() => import('@/pages/app/AccountPage'))
+const ActivityPage = lazy(() => import('@/pages/app/ActivityPage'))
+const CompanyPage = lazy(() => import('@/pages/app/CompanyPage'))
+const CustomersPage = lazy(() => import('@/pages/app/CustomersPage'))
+const DashboardPage = lazy(() => import('@/pages/app/DashboardPage'))
+const FleetPage = lazy(() => import('@/pages/app/FleetPage'))
+const MembersPage = lazy(() => import('@/pages/app/MembersPage'))
+const PaymentsPage = lazy(() => import('@/pages/app/PaymentsPage'))
+const RentalDetailPage = lazy(() => import('@/pages/app/RentalDetailPage'))
+const RentalFormPage = lazy(() => import('@/pages/app/RentalFormPage'))
+const RentalsPage = lazy(() => import('@/pages/app/RentalsPage'))
+const ReportsPage = lazy(() => import('@/pages/app/ReportsPage'))
+const ForgotPasswordPage = lazy(() => import('@/pages/auth/ForgotPasswordPage'))
+const LoginPage = lazy(() => import('@/pages/auth/LoginPage'))
+const ResetPasswordPage = lazy(() => import('@/pages/auth/ResetPasswordPage'))
+const SetupPage = lazy(() => import('@/pages/auth/SetupPage'))
 
 function AppLayout() {
   return (
@@ -28,6 +29,13 @@ function AppLayout() {
 
 export default function App() {
   return (
+    <Suspense
+      fallback={
+        <div className="grid min-h-screen place-items-center bg-ink-50 text-sm text-ink-500">
+          Loading page…
+        </div>
+      }
+    >
     <Routes>
       <Route path="/" element={<Navigate to="/login" replace />} />
 
@@ -93,5 +101,6 @@ export default function App() {
 
       <Route path="*" element={<NotFound />} />
     </Routes>
+    </Suspense>
   )
 }

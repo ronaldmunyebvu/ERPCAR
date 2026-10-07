@@ -15,12 +15,23 @@ import {
   Wallet,
   X,
   KeyRound,
+  WifiOff,
+  RefreshCw,
+  AlertTriangle,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { cn, initialsOf } from '@/lib/utils'
 import { dataSource } from '@/db'
 import { RoleBadge } from '@/components/domain/Badges'
 import { Button } from '@/components/ui'
+import {
+  offlineStatus,
+  readOutbox,
+  removeOutboxItem,
+  retryOutboxItem,
+  subscribeOfflineStatus,
+} from '@/db/offline/local'
+import { resolveOfflineChange, syncPendingOfflineChanges } from '@/db/remote/repo.api'
 
 function navSections({ isAdmin }) {
   const sections = [
@@ -148,6 +159,159 @@ function SidebarContent({ onNavigate }) {
         )}
       </div>
     </div>
+  )
+}
+
+function OfflineSyncNotice({ isAdmin }) {
+  const [status, setStatus] = useState(null)
+  const [items, setItems] = useState([])
+  const [error, setError] = useState(null)
+  const [busyId, setBusyId] = useState(null)
+
+  const refresh = () => {
+    try {
+      setStatus(offlineStatus())
+      setItems(readOutbox())
+      setError(null)
+    } catch (cause) {
+      setError(cause.message)
+    }
+  }
+
+  useEffect(() => {
+    const update = () => {
+      refresh()
+      if (navigator.onLine) {
+        syncPendingOfflineChanges().then(refresh).catch((cause) => setError(cause.message))
+      }
+    }
+    refresh()
+    const unsubscribe = subscribeOfflineStatus(update)
+    if (navigator.onLine) {
+      syncPendingOfflineChanges().then(refresh).catch((cause) => setError(cause.message))
+    }
+    return unsubscribe
+  }, [])
+
+  const resolve = async (item, keepOfflineVersion) => {
+    setBusyId(item.id)
+    try {
+      await resolveOfflineChange(item, keepOfflineVersion)
+      refresh()
+    } catch (cause) {
+      setError(cause.message)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const retry = async (item) => {
+    retryOutboxItem(item.id)
+    refresh()
+    await syncPendingOfflineChanges()
+    refresh()
+  }
+
+  if (!error && status?.online && !status.pending && !status.conflicts && !status.failed) {
+    return null
+  }
+
+  const conflicts = items.filter((item) => item.status === 'conflict')
+  const failed = items.filter((item) => item.status === 'failed')
+
+  return (
+    <section
+      aria-live="polite"
+      className={`mb-4 rounded-xl border p-3 text-sm ${
+        !status?.online
+          ? 'border-amber-300 bg-amber-50 text-amber-950'
+          : status?.conflicts || status?.failed || error
+            ? 'border-rose-300 bg-rose-50 text-rose-950'
+            : 'border-brand-200 bg-brand-50 text-brand-950'
+      }`}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        {!status?.online ? <WifiOff size={16} /> : <RefreshCw size={16} />}
+        <strong>
+          {error
+            ? 'Offline data needs attention'
+            : !status?.online
+              ? 'You are offline'
+              : status?.conflicts
+                ? 'Offline changes need review'
+                : status?.failed
+                  ? 'Some changes could not sync'
+                  : `Syncing ${status?.pending || 0} offline change${status?.pending === 1 ? '' : 's'}`}
+        </strong>
+        {!status?.online && (
+          <span>Changes you make are saved on this device and will sync when you reconnect.</span>
+        )}
+        {status?.lastUpdated && (
+          <span className="text-xs opacity-75">
+            Cached {new Date(status.lastUpdated).toLocaleString()}
+          </span>
+        )}
+        {status?.online && status?.pending > 0 && (
+          <button
+            type="button"
+            onClick={() =>
+              syncPendingOfflineChanges().then(refresh).catch((cause) => setError(cause.message))
+            }
+            className="ml-auto rounded-md px-2 py-1 text-xs font-semibold underline"
+          >
+            Sync now
+          </button>
+        )}
+      </div>
+      {error && <p className="mt-2">{error}</p>}
+      {conflicts.map((item) => (
+        <div key={item.id} className="mt-3 rounded-lg border border-rose-200 bg-white/70 p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">{item.operation}: changed on another device</p>
+              <p className="mt-1 text-xs">{item.message}</p>
+              {!isAdmin ? (
+                <p className="mt-2 text-xs font-medium">An admin must sign in on this device to resolve it.</p>
+              ) : status?.online ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={busyId === item.id}
+                    onClick={() => resolve(item, false)}
+                    className="rounded-md border border-ink-300 px-2 py-1 text-xs font-medium disabled:opacity-50"
+                  >
+                    Keep server version
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busyId === item.id}
+                    onClick={() => resolve(item, true)}
+                    className="rounded-md bg-rose-700 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
+                  >
+                    Apply this device’s version
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ))}
+      {failed.map((item) => (
+        <div key={item.id} className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <span>{item.operation}: {item.message}</span>
+          {status?.online && (
+            <button
+              type="button"
+              onClick={() => retry(item)}
+              className="rounded-md border border-current px-2 py-1 font-semibold"
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      ))}
+    </section>
   )
 }
 
@@ -286,7 +450,10 @@ export function AppShell({ children }) {
           </div>
         </header>
 
-        <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 sm:py-6">{children}</main>
+        <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 sm:py-6">
+          <OfflineSyncNotice isAdmin={isAdmin} />
+          {children}
+        </main>
       </div>
     </div>
   )

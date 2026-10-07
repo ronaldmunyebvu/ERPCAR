@@ -1,6 +1,6 @@
 import { createNeonRepository } from '../../src/db/neon/repo.neon.js'
 import { OPERATIONS } from '../../src/db/operations.js'
-import { connectionString, query } from './db.js'
+import { connectionString, one, query } from './db.js'
 import { currentSession } from './auth.js'
 import { SESSION_COOKIE, fail, json, parseCookies, readBody } from './http.js'
 import { ApiError, resolveCall, sanitizeArgs } from './scope.js'
@@ -15,6 +15,17 @@ import { ApiError, resolveCall, sanitizeArgs } from './scope.js'
  */
 
 let repositoryPromise = null
+const VERSIONED_OPERATIONS = {
+  'cars.update': ['cars', 0],
+  'cars.remove': ['cars', 0],
+  'customers.update': ['customers', 0],
+  'customers.remove': ['customers', 0],
+  'rentals.update': ['rentals', 0],
+  'rentals.returnCar': ['rentals', 0],
+  'rentals.cancel': ['rentals', 0],
+  'rentals.remove': ['rentals', 0],
+  'payments.remove': ['payments', 0],
+}
 
 function repository() {
   if (!repositoryPromise) {
@@ -54,13 +65,39 @@ export default async function handler(event) {
 
   try {
     const session = await currentSession(parseCookies(event)[SESSION_COOKIE])
+    const sync = body.sync && typeof body.sync === 'object' ? body.sync : null
+    if (sync?.force && session?.role !== 'admin') {
+      throw new ApiError('Only an admin can resolve an offline data conflict.', 403)
+    }
+    const clientArgs = sanitizeArgs(Array.isArray(body.args) ? body.args : [])
     const { group, method, args, guardResult } = await resolveCall(
       operation,
-      sanitizeArgs(Array.isArray(body.args) ? body.args : []),
+      clientArgs,
       session,
     )
 
     const repo = await repository()
+    if (sync?.mutationId) {
+      if (!/^[0-9a-f-]{36}$/i.test(sync.mutationId)) {
+        throw new ApiError('Invalid offline mutation identifier.', 400)
+      }
+
+      const versioned = VERSIONED_OPERATIONS[operation]
+      if (versioned && sync.baseVersion && !sync.force) {
+        const [table, index] = versioned
+        const id = args[index]
+        const current = await one(
+          `SELECT * FROM ${table} WHERE id = $1 AND company_id = $2`,
+          [id, session.companyId],
+        )
+        if (!current && operation.endsWith('.remove')) {
+          return json({ data: { removed: true } })
+        }
+        if (!current || new Date(current.updated_at).toISOString() !== sync.baseVersion) {
+          return json({ conflict: { mutationId: sync.mutationId, operation, remote: current } }, 409)
+        }
+      }
+    }
     const target = repo[group]
     const fn = target?.[method]
     if (typeof fn !== 'function') throw new ApiError('Misconfigured operation.', 500)

@@ -1,6 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { getRepository, isLiveMode } from '@/db'
 import * as authApi from '@/db/remote/auth.api'
+import {
+  clearOfflineAccount,
+  getOfflineAccount,
+  saveOfflineAccount,
+} from '@/db/offline/local'
 import { signToken, verifyToken } from '@/lib/crypto'
 
 /**
@@ -49,13 +54,31 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let cancelled = false
 
-    const restore = isLiveMode() ? authApi.restore() : accountFromMockToken()
+    const restore = isLiveMode()
+      ? authApi.restore().catch((cause) => {
+          if (cause.status === 0) {
+            const cached = getOfflineAccount()
+            if (cached) return cached
+          }
+          throw cause
+        })
+      : accountFromMockToken()
 
     restore
       .then((account) => {
-        if (cancelled || !account) return
+        if (cancelled) return
+        if (!account) {
+          if (isLiveMode() && navigator.onLine) clearOfflineAccount()
+          return
+        }
         setUser(account.user)
         setCompany(account.company)
+        if (isLiveMode() && navigator.onLine) {
+          saveOfflineAccount(account)
+          getRepository()
+            .then((repo) => repo.bootstrap(account.company.id))
+            .catch((cause) => console.error('[offline] could not refresh company cache', cause))
+        }
       })
       .catch((cause) => {
         if (!cancelled) setError(cause.message)
@@ -82,6 +105,12 @@ export function AuthProvider({ children }) {
           localStorage.setItem(SESSION_KEY, token)
           return found
         })
+    if (isLiveMode()) {
+      saveOfflineAccount(account)
+      getRepository()
+        .then((repo) => repo.bootstrap(account.company.id))
+        .catch((cause) => console.error('[offline] could not prepare company cache', cause))
+    }
     setUser(account.user)
     setCompany(account.company)
     return account.user
@@ -90,13 +119,16 @@ export function AuthProvider({ children }) {
   const signOut = useCallback(async () => {
     if (isLiveMode()) await authApi.signOut().catch(() => {})
     else clearMockSession()
+    if (isLiveMode()) clearOfflineAccount()
     setUser(null)
     setCompany(null)
   }, [])
 
   const refresh = useCallback(async () => {
     if (!user) return null
-    const account = isLiveMode()
+    const account = isLiveMode() && !navigator.onLine
+      ? getOfflineAccount()
+      : isLiveMode()
       ? await authApi.restore()
       : await getRepository().then((repo) => repo.auth.findUserById(user.id))
     if (account) {
