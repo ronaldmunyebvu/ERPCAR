@@ -75,8 +75,8 @@ function layout({ preheader, heading, body, action, note, footer }) {
             ${footer}
           </td></tr>
         </table>
-        <p style="font-size:11px;color:#8a90a2;margin-top:14px;">Powered by Skyro Consultancy</p>
-        <p style="font-size:11px;color:#8a90a2;margin-top:2px;">A member of Disafrika Group</p>
+        <p style="font-size:15px;font-weight:bold;color:#1f45eb;margin-top:18px;text-align:center;">Powered by Skyro Consultancy</p>
+        <p style="font-size:13px;font-weight:600;color:#3165f6;margin-top:4px;text-align:center;">A member of Disafrika Group</p>
       </td></tr>
     </table>
   </body>
