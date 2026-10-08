@@ -63,7 +63,7 @@ export default function LoginPage() {
               <Car size={23} />
             </span>
             <div>
-              <p className="text-lg font-semibold text-white">RentFlow</p>
+              <p className="text-lg font-semibold text-white">VNexus 360</p>
               <p className="text-xs text-ink-400">Car Rental Management System</p>
             </div>
           </div>
@@ -97,7 +97,7 @@ export default function LoginPage() {
               <Car size={20} />
             </span>
             <div>
-              <p className="font-semibold text-ink-900">RentFlow</p>
+              <p className="font-semibold text-ink-900">VNexus 360</p>
               <p className="text-xs text-ink-500">Car Rental Management System</p>
             </div>
           </div>

@@ -85,7 +85,7 @@ function SidebarContent({ onNavigate }) {
           </span>
         )}
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-white">{company?.name || 'RentFlow'}</p>
+          <p className="truncate text-sm font-semibold text-white">{company?.name || 'VNexus 360'}</p>
           <p className="truncate text-[11px] text-ink-400">Car Rental Manager</p>
         </div>
       </div>

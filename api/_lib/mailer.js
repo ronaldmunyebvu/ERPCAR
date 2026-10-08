@@ -57,7 +57,7 @@ function layout({ preheader, heading, body, action, note, footer }) {
       <tr><td align="center">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border-radius:14px;border:1px solid #e4e7ee;overflow:hidden;">
           <tr><td style="background:#1f45eb;padding:18px 24px;">
-            <span style="font-size:15px;font-weight:bold;color:#ffffff;">RentFlow</span>
+            <span style="font-size:15px;font-weight:bold;color:#ffffff;">VNexus 360</span>
           </td></tr>
           <tr><td style="padding:26px 24px 8px;">
             <h1 style="margin:0;font-size:20px;line-height:1.3;">${heading}</h1>
@@ -90,7 +90,7 @@ export async function sendConfirmationMail({ to, name, company, token }) {
   const link = `${appOrigin()}/confirm-email?token=${encodeURIComponent(token)}`
   try {
     await send.sendMail({
-      from: `"RentFlow" <${process.env.MAIL_USER}>`,
+      from: `"VNexus 360" <${process.env.MAIL_USER}>`,
       to,
       subject: `Confirm your car rental — ${company}`,
       text: [
@@ -125,7 +125,7 @@ export async function sendResetCodeMail({ to, name, code }) {
   if (!send) return false
   try {
     await send.sendMail({
-      from: `"RentFlow" <${process.env.MAIL_USER}>`,
+      from: `"VNexus 360" <${process.env.MAIL_USER}>`,
       to,
       subject: `Your reset code: ${code}`,
       text: [

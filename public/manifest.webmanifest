@@ -1,6 +1,6 @@
 {
-  "name": "RentFlow Car Rental Manager",
-  "short_name": "RentFlow",
+  "name": "VNexus 360 Car Rental Manager",
+  "short_name": "VNexus 360",
   "description": "Car rental fleet, customer and booking management.",
   "start_url": "/app",
   "scope": "/",
