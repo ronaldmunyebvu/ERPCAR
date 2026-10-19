@@ -23,7 +23,12 @@
  * own       Table whose row at `args[0].id` must belong to the session company.
  *           Guards the methods that look a row up by bare primary key, which
  *           would otherwise be a cross-tenant read/write if an id were guessed.
- * owner     Like `own`, but the table row at `args[n].id` for a nested payload.
+ * owner     Like `own`, but for a nested payload field: the row at
+ *           `args[n][key]` must exist in the rule's own table and belong to
+ *           the session company. Each rule names its table, because the
+ *           referenced row is a different entity than the one being written
+ *           (a rental points at a car and a customer, neither of which is a
+ *           rental).
  * actor     Index of the trailing `actor` argument, replaced with the real
  *           signed-in user so activity logs cannot be forged.
  * guard     Name of an extra precondition checked in `api/_lib/scope.js`.
@@ -37,9 +42,9 @@ export const FROM = {
   USER: 'userId',
 }
 
-/** `owner` entries: [argument index, id field on that argument]. */
-function ownsArg(index, key = 'id') {
-  return { arg: index, key }
+/** `owner` entries: argument index, table to verify against, id field. */
+function ownsArg(index, table, key = 'id') {
+  return { arg: index, table, key }
 }
 
 export const OPERATIONS = {
@@ -133,13 +138,13 @@ export const OPERATIONS = {
   'rentals.create': {
     auth: 'member',
     force: [{ index: 0, key: 'company_id', from: FROM.COMPANY }],
-    owner: [ownsArg(0, 'car_id'), ownsArg(0, 'customer_id')],
+    owner: [ownsArg(0, 'cars', 'car_id'), ownsArg(0, 'customers', 'customer_id')],
     actor: 1,
   },
   'rentals.update': {
     auth: 'member',
     own: 'rentals',
-    owner: [ownsArg(1, 'car_id'), ownsArg(1, 'customer_id')],
+    owner: [ownsArg(1, 'cars', 'car_id'), ownsArg(1, 'customers', 'customer_id')],
     actor: 2,
   },
   'rentals.returnCar': { auth: 'member', own: 'rentals', actor: 2 },
@@ -151,7 +156,7 @@ export const OPERATIONS = {
   'payments.create': {
     auth: 'member',
     force: [{ index: 0, key: 'companyId', from: FROM.COMPANY }],
-    owner: [ownsArg(0, 'rental_id')],
+    owner: [ownsArg(0, 'rentals', 'rental_id')],
     actor: 1,
   },
   'payments.remove': { auth: 'member', own: 'payments', actor: 1 },

@@ -144,7 +144,10 @@ export async function resolveCall(operation, args, session) {
     for (const rule of effective.owner) {
       const target = resolved[rule.arg]
       if (!target) continue
-      await checkOwn(effective.own, target[rule.key], session.companyId)
+      // The referenced row belongs to the rule's own table (a rental points at
+      // a car and a customer), never to `effective.own`, which is undefined on
+      // `create` operations.
+      await checkOwn(rule.table, target[rule.key], session.companyId)
     }
   }
 
