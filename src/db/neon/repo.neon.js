@@ -74,6 +74,20 @@ function filters() {
     },
     op(column, operator, value) {
       if (value === undefined || value === null || value === '') return api
+      // A bare calendar date (`YYYY-MM-DD`) carries no time. Used as an upper
+      // bound it would mean midnight *starting* that day, silently dropping
+      // everything recorded during it. The bound is therefore moved to the
+      // start of the following day and made exclusive, so the whole day is
+      // included. Lower bounds already behave correctly (midnight is the
+      // first instant of the day).
+      const bareDate = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+      if (bareDate && operator === '<=') {
+        const next = new Date(`${value}T00:00:00Z`)
+        next.setUTCDate(next.getUTCDate() + 1)
+        params.push(next.toISOString().slice(0, 10))
+        clauses.push(`${column} < $${params.length}`)
+        return api
+      }
       params.push(value)
       clauses.push(`${column} ${operator} $${params.length}`)
       return api

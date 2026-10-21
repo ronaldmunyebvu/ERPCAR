@@ -115,6 +115,20 @@ export function startOfDay(value = new Date()) {
   return copy
 }
 
+/**
+ * The last instant of the calendar day `value` falls on.
+ *
+ * A range filter that ends on a bare `YYYY-MM-DD` date must include everything
+ * recorded during that day; comparing against `startOfDay` would stop at
+ * midnight and drop the whole day. Pair with `<=`.
+ */
+export function endOfDay(value = new Date()) {
+  const date = toDate(value)
+  const copy = new Date(date)
+  copy.setHours(23, 59, 59, 999)
+  return copy
+}
+
 export function addDays(value, amount) {
   const date = toDate(value) ?? new Date()
   const copy = new Date(date)

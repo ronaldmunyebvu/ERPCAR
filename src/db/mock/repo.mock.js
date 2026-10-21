@@ -10,6 +10,7 @@ import {
   matchesSearch,
   toDate,
   startOfDay,
+  endOfDay,
   addDays,
   addMonths,
   daysBetween,
@@ -1363,8 +1364,8 @@ export function createMockRepository() {
         let rows = data.payments.filter((payment) => payment.company_id === companyId)
         if (rentalId) rows = rows.filter((payment) => payment.rental_id === rentalId)
         if (method) rows = rows.filter((payment) => payment.method === method)
-        if (from) rows = rows.filter((payment) => toDate(payment.received_at) >= toDate(from))
-        if (to) rows = rows.filter((payment) => toDate(payment.received_at) <= toDate(to))
+        if (from) rows = rows.filter((payment) => toDate(payment.received_at) >= startOfDay(from))
+        if (to) rows = rows.filter((payment) => toDate(payment.received_at) <= endOfDay(to))
 
         const carIndex = byId(data.cars)
         const customerIndex = byId(data.customers)
@@ -1440,8 +1441,8 @@ export function createMockRepository() {
         if (direction) rows = rows.filter((entry) => entry.direction === direction)
         if (scope) rows = rows.filter((entry) => (entry.expense_scope || 'company') === scope)
         if (carId) rows = rows.filter((entry) => entry.car_id === carId)
-        if (from) rows = rows.filter((entry) => toDate(entry.occurred_at) >= toDate(from))
-        if (to) rows = rows.filter((entry) => toDate(entry.occurred_at) <= toDate(to))
+        if (from) rows = rows.filter((entry) => toDate(entry.occurred_at) >= startOfDay(from))
+        if (to) rows = rows.filter((entry) => toDate(entry.occurred_at) <= endOfDay(to))
 
         const carIndex = byId(data.cars)
         const userIndex = byId(data.users)
