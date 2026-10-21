@@ -381,6 +381,15 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (!(await verifyPassword(password, user.password_hash))) {
           throw new Error('Incorrect password. Please try again.')
         }
+        // The sign-in screen asks the user to pick a role, so the choice must
+        // match the account. Checked after the password so a wrong role cannot
+        // be used to probe who has an account. `role` is absent in scripts.
+        if (role && role !== user.role) {
+          throw new Error(
+            `This account is registered as ${user.role === 'admin' ? 'an Owner/Admin' : 'a Staff member'}. ` +
+              'Choose the matching option and try again.',
+          )
+        }
         // Password checked first: an unconfirmed address must not become a way
         // to probe who has an account. The emailed link, or the reset code
         // posted to the same inbox, is what unlocks it.

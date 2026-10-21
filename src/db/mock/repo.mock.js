@@ -269,6 +269,15 @@ export function createMockRepository() {
         }
         const ok = await verifyPassword(password, user.password_hash)
         if (!ok) throw new Error('Incorrect password. Please try again.')
+        // The sign-in screen asks the user to pick a role, so the choice must
+        // match the account. Checked after the password so a wrong role cannot
+        // be used to probe who has an account. `role` is absent in scripts.
+        if (role && role !== user.role) {
+          throw new Error(
+            `This account is registered as ${user.role === 'admin' ? 'an Owner/Admin' : 'a Staff member'}. ` +
+              'Choose the matching option and try again.',
+          )
+        }
         // Checked after the password so an unconfirmed address cannot be used
         // to probe who has an account. Rows written before this rule existed
         // have no flag at all and are treated as confirmed.

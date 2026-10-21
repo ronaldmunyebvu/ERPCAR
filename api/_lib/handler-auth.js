@@ -80,7 +80,11 @@ const ACTIONS = {
     const account = await repo.auth.signIn({
       email,
       password,
-      role: payload.role === 'member' ? 'member' : undefined,
+      // The sign-in screen makes the user pick a role, and the choice must
+      // match the account: an owner signing in as "Staff member" (or the
+      // reverse) is rejected inside the repository. Absent role (scripts)
+      // skips the check.
+      role: payload.role === 'member' ? 'member' : payload.role === 'owner' ? 'admin' : undefined,
       company: payload.company ? String(payload.company) : undefined,
     })
     const { token, maxAge } = issueSession({

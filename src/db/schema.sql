@@ -69,6 +69,10 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_key ON users (lower(email));
 
+-- Databases created before staff chose their own password require a hash, so
+-- drop the old NOT NULL on upgrade. (A no-op when it is already nullable.)
+ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+
 -- A new owner cannot sign in until they open the emailed confirmation link.
 -- Everyone else (staff added by an admin, demo data) is already trusted, so
 -- the column defaults to true and company setup is the only writer of false.
@@ -131,6 +135,11 @@ CREATE TABLE IF NOT EXISTS cars (
 
 CREATE UNIQUE INDEX IF NOT EXISTS cars_registration_key ON cars (company_id, lower(registration));
 CREATE INDEX IF NOT EXISTS cars_company_status_idx ON cars (company_id, status);
+
+-- Odometer upgrade: databases created before mileage tracking need the column
+-- added to the existing table (CREATE TABLE IF NOT EXISTS skips it otherwise).
+ALTER TABLE cars
+  ADD COLUMN IF NOT EXISTS mileage int NOT NULL DEFAULT 0 CHECK (mileage >= 0);
 
 -- ------------------------------------------------- ownership + Zinara licence
 -- A vehicle is either owned outright (`owned`) or taken from a third party on
@@ -205,6 +214,10 @@ CREATE INDEX IF NOT EXISTS rentals_car_idx             ON rentals (car_id);
 CREATE INDEX IF NOT EXISTS rentals_customer_idx        ON rentals (customer_id);
 CREATE INDEX IF NOT EXISTS rentals_created_by_idx      ON rentals (created_by);
 
+-- Odometer readings captured at pickup and return (see cars.mileage above).
+ALTER TABLE rentals ADD COLUMN IF NOT EXISTS start_mileage int;
+ALTER TABLE rentals ADD COLUMN IF NOT EXISTS end_mileage   int;
+
 -- ---------------------------------------------------------------- payments
 CREATE TABLE IF NOT EXISTS payments (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -267,7 +280,11 @@ CREATE INDEX IF NOT EXISTS activity_user_idx    ON activity_log (user_id, create
 
 -- --------------------------------------------------- overdue flag (view)
 -- Keeps "overdue" derived from data rather than trusted from a cached column.
-CREATE OR REPLACE VIEW rentals_with_balance AS
+-- Dropped first: CREATE OR REPLACE cannot reorder columns, and rentals gained
+-- start_mileage/end_mileage after this view was first created. Nothing depends
+-- on the view, so recreating it is safe.
+DROP VIEW IF EXISTS rentals_with_balance;
+CREATE VIEW rentals_with_balance AS
 SELECT
   r.*,
   COALESCE(p.paid, 0)                                                   AS amount_paid,
