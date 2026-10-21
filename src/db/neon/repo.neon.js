@@ -8,6 +8,7 @@
  * that computes it.
  */
 import { hashPassword, verifyPassword, randomToken, randomDigits } from '../../lib/crypto.js'
+import { normaliseDuties } from '../../lib/duties.js'
 import {
   isOverdue,
   rentalTotal,
@@ -41,7 +42,7 @@ import {
 
 const PUBLIC_USER_COLUMNS = `
   id, company_id, full_name, email, phone, role, status, avatar_url,
-  email_verified, last_login_at, created_at, updated_at
+  email_verified, duties, last_login_at, created_at, updated_at
 `
 
 function num(value, fallback = 0) {
@@ -253,17 +254,19 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
     },
     offline: {
       async snapshot(companyId) {
-        const [company, users, cars, customers, rentals, payments, activity] = await Promise.all([
-          one('SELECT * FROM companies WHERE id = $1', [companyId]),
-          rows(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE company_id = $1 ORDER BY full_name`, [companyId]),
-          rows('SELECT * FROM cars WHERE company_id = $1 ORDER BY registration', [companyId]),
-          rows('SELECT * FROM customers WHERE company_id = $1 ORDER BY full_name', [companyId]),
-          rows('SELECT * FROM rentals WHERE company_id = $1 ORDER BY pickup_at DESC', [companyId]),
-          rows('SELECT * FROM payments WHERE company_id = $1 ORDER BY received_at DESC', [companyId]),
-          rows('SELECT * FROM activity_log WHERE company_id = $1 ORDER BY created_at DESC LIMIT 500', [companyId]),
-        ])
+        const [company, users, cars, customers, rentals, payments, cashbook, activity] =
+          await Promise.all([
+            one('SELECT * FROM companies WHERE id = $1', [companyId]),
+            rows(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE company_id = $1 ORDER BY full_name`, [companyId]),
+            rows('SELECT * FROM cars WHERE company_id = $1 ORDER BY registration', [companyId]),
+            rows('SELECT * FROM customers WHERE company_id = $1 ORDER BY full_name', [companyId]),
+            rows('SELECT * FROM rentals WHERE company_id = $1 ORDER BY pickup_at DESC', [companyId]),
+            rows('SELECT * FROM payments WHERE company_id = $1 ORDER BY received_at DESC', [companyId]),
+            rows('SELECT * FROM cashbook_entries WHERE company_id = $1 ORDER BY occurred_at DESC', [companyId]),
+            rows('SELECT * FROM activity_log WHERE company_id = $1 ORDER BY created_at DESC LIMIT 500', [companyId]),
+          ])
         return {
-          version: 1,
+          version: 2,
           seeded_at: new Date().toISOString(),
           companies: company ? [company] : [],
           users,
@@ -279,6 +282,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
               : JSON.parse(rental.additional_charges || '[]'),
           })),
           payments: payments.map(shapePaymentRow),
+          cashbook: cashbook.map((entry) => ({ ...entry, amount: num(entry.amount) })),
           activity,
           password_resets: [],
         }
@@ -348,7 +352,12 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         }
       },
 
-      async signIn({ email, password }) {
+      /**
+       * Sign in with email + password. Members additionally name their company,
+       * which is checked against the tenant the email belongs to — without it a
+       * stolen email guess would work across every company on the platform.
+       */
+      async signIn({ email, password, role, company }) {
         const user = await one(
           `SELECT * FROM users WHERE lower(email) = lower($1)`,
           [String(email).trim()],
@@ -356,6 +365,18 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (!user) throw new Error('No account found for that email address.')
         if (user.status !== 'active') {
           throw new Error('This account has been deactivated. Contact your admin.')
+        }
+        if (!user.password_hash) {
+          throw new Error(
+            'This account has no password yet. Use "Set up your account" on the sign-in page first.',
+          )
+        }
+        if (role === 'member' && company) {
+          const ownCompany = await one('SELECT name FROM companies WHERE id = $1', [user.company_id])
+          const matches =
+            ownCompany &&
+            String(ownCompany.name).trim().toLowerCase() === String(company).trim().toLowerCase()
+          if (!matches) throw new Error('No account found for that email address.')
         }
         if (!(await verifyPassword(password, user.password_hash))) {
           throw new Error('Incorrect password. Please try again.')
@@ -369,7 +390,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
               'If it is gone, use "Forgot password" to verify with a code instead.',
           )
         }
-        const company = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
+        const companyRecord = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
         await rows(`UPDATE users SET last_login_at = now(), updated_at = now() WHERE id = $1`, [user.id])
         await logActivity({
           company_id: user.company_id,
@@ -381,7 +402,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         })
         const { password_hash, ...safe } = user
         void password_hash
-        return { user: safe, company }
+        return { user: safe, company: companyRecord }
       },
 
       async signOut() {},
@@ -459,17 +480,21 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             throw new Error('This company already has an active owner/admin account.')
           }
         }
+        const duties = normaliseDuties(input.duties, input.role || 'member')
         const user = await one(
-          `INSERT INTO users (company_id, full_name, email, phone, password_hash, role, status)
-           VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING ${PUBLIC_USER_COLUMNS}`,
+          `INSERT INTO users (company_id, full_name, email, phone, password_hash, role, status, duties)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${PUBLIC_USER_COLUMNS}`,
           [
             input.company_id,
             input.full_name,
             email,
             input.phone || null,
-            await hashPassword(input.password),
+            // Staff pick their own password on first sign-in, so an admin
+            // creating an account does not supply one.
+            input.password ? await hashPassword(input.password) : null,
             input.role || 'member',
             input.status || 'active',
+            duties,
           ],
         )
         await logActivity({
@@ -479,9 +504,9 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           entity: 'user',
           entity_id: user.id,
           summary: `Created ${user.role} account ${user.email}`,
-          metadata: { email, role: user.role },
+          metadata: { email, role: user.role, duties },
         })
-        return user
+        return { ...user, has_password: Boolean(input.password) }
       },
 
       async updateUser(id, patch, actor) {
@@ -506,6 +531,8 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           }
         }
 
+        const duties =
+          patch.duties === undefined ? null : normaliseDuties(patch.duties, patch.role || current.role)
         const user = await one(
           `UPDATE users SET
              full_name = COALESCE($2, full_name),
@@ -515,6 +542,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
              status    = COALESCE($6, status),
              avatar_url= COALESCE($7, avatar_url),
              password_hash = COALESCE($8, password_hash),
+             duties    = COALESCE($9, duties),
              updated_at = now()
            WHERE id = $1
            RETURNING ${PUBLIC_USER_COLUMNS}`,
@@ -527,6 +555,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             patch.status ?? null,
             patch.avatar_url ?? null,
             patch.password ? await hashPassword(patch.password) : null,
+            duties,
           ],
         )
 
@@ -700,6 +729,111 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         ])
         return { ok: true }
       },
+
+      /**
+       * Starts first-time member verification: the staff member names their
+       * company and email, and gets a six digit code (the same token policy as
+       * a password reset, so a demo build shows it on screen). The response is
+       * identical whether or not the account exists.
+       */
+      async requestMemberVerification({ email, company }) {
+        const user = await one('SELECT * FROM users WHERE lower(email) = lower($1)', [
+          String(email || '').trim(),
+        ])
+        const email_out = String(email || '').trim().toLowerCase()
+        if (!user || !company) return { ok: true, token: null, user: null, email: email_out }
+        const ownCompany = await one('SELECT name FROM companies WHERE id = $1', [user.company_id])
+        const matches =
+          ownCompany &&
+          String(ownCompany.name).trim().toLowerCase() === String(company).trim().toLowerCase()
+        if (!matches) return { ok: true, token: null, user: null, email: email_out }
+
+        await rows(
+          `UPDATE password_resets SET used_at = now()
+            WHERE user_id = $1 AND purpose = 'member_setup' AND used_at IS NULL`,
+          [user.id],
+        )
+        const code = await storeCredential(user.id, 'member_setup', 10, () => randomDigits(6))
+        await deliver('memberSetupCode', { to: user.email, name: user.full_name, code })
+        const { password_hash, ...safe } = user
+        void password_hash
+        return { ok: true, token: code, user: safe, email: user.email }
+      },
+
+      /**
+       * Finishes first-time verification: code proves the inbox, then the
+       * member chooses their password and is signed in. Same attempt counting
+       * as a password reset — an unbounded guess is no defence.
+       */
+      async completeMemberVerification({ email, company, token, password }) {
+        const secret = String(token ?? '')
+        if (String(password || '').length < 8) {
+          throw new Error('Choose a password with at least 8 characters.')
+        }
+        const user = await one('SELECT * FROM users WHERE lower(email) = lower($1)', [
+          String(email || '').trim(),
+        ])
+        const fail = () =>
+          new Error('This verification code is invalid or has expired. Please request a new one.')
+        if (!user || !company) throw fail()
+        const ownCompany = await one('SELECT name FROM companies WHERE id = $1', [user.company_id])
+        if (
+          !ownCompany ||
+          String(ownCompany.name).trim().toLowerCase() !== String(company).trim().toLowerCase()
+        ) {
+          throw fail()
+        }
+
+        const credential = await one(
+          `SELECT * FROM password_resets
+            WHERE user_id = $1 AND purpose = 'member_setup'
+              AND used_at IS NULL AND expires_at > now()
+            ORDER BY created_at DESC LIMIT 1`,
+          [user.id],
+        )
+        if (!credential) throw fail()
+        if (num(credential.attempts) >= 5) {
+          await rows('UPDATE password_resets SET used_at = now() WHERE id = $1', [credential.id])
+          throw new Error('Too many attempts. Please request a new code.')
+        }
+        if (credential.token_hash !== secret) {
+          const attempts = num(credential.attempts) + 1
+          await rows(
+            `UPDATE password_resets SET attempts = $2, used_at = CASE WHEN $2 >= 5 THEN now() ELSE used_at END
+              WHERE id = $1`,
+            [credential.id, attempts],
+          )
+          throw new Error(
+            attempts >= 5
+              ? 'Too many attempts. Please request a new code.'
+              : 'That code is incorrect. Please try again.',
+          )
+        }
+
+        await rows(
+          `UPDATE users SET password_hash = $2, email_verified = true, last_login_at = now(), updated_at = now()
+            WHERE id = $1`,
+          [user.id, await hashPassword(password)],
+        )
+        await rows(
+          `UPDATE password_resets SET used_at = now()
+            WHERE user_id = $1 AND purpose = 'member_setup' AND used_at IS NULL`,
+          [user.id],
+        )
+        await logActivity({
+          company_id: user.company_id,
+          user_id: user.id,
+          action: 'user.setup_completed',
+          entity: 'user',
+          entity_id: user.id,
+          summary: `${user.full_name} completed first-time account setup`,
+        })
+        const updated = await one(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE id = $1`, [
+          user.id,
+        ])
+        const companyRow = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
+        return { user: updated ?? user, company: companyRow }
+      },
     },
 
     /* ========================================================== companies */
@@ -767,6 +901,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         }
         return rows(
           `SELECT ${PUBLIC_USER_COLUMNS},
+             (users.password_hash IS NOT NULL) AS has_password,
              (SELECT count(*)::int FROM rentals r WHERE r.created_by = users.id) AS rentals_captured
            FROM users${f.where()}
            ORDER BY full_name`,
@@ -1217,6 +1352,10 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           const existing = await one('SELECT id FROM rentals WHERE id = $1', [input.id])
           if (existing) return this.get(input.id, { companyId: input.company_id })
         }
+        const startMileage = Number(input.start_mileage)
+        if (!Number.isFinite(startMileage) || startMileage < 0) {
+          throw new Error('Enter the vehicle mileage at pickup.')
+        }
         const car = await one('SELECT * FROM cars WHERE id = $1', [input.car_id])
         if (!car) throw new Error('Vehicle not found')
         if (car.status === 'maintenance' || car.status === 'inactive') {
@@ -1265,8 +1404,8 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         const rental = await one(
           `INSERT INTO rentals (id, company_id, car_id, customer_id, created_by, reference, pickup_at,
                                 expected_return_at, daily_rate, days, total_amount, deposit_amount,
-                                additional_charges, status, notes)
-           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,'active',$14)
+                                additional_charges, status, start_mileage, notes)
+           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,'active',$14,$15)
            RETURNING *`,
           [
             input.id || null,
@@ -1282,6 +1421,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             Number(input.total_amount ?? dailyRate * days) || 0,
             Number(input.deposit_amount) || 0,
             JSON.stringify(Array.isArray(input.additional_charges) ? input.additional_charges : []),
+            startMileage,
             input.notes || null,
           ],
         )
@@ -1336,6 +1476,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
              additional_charges = COALESCE($10::jsonb, additional_charges),
              status = COALESCE($11, status),
              notes = COALESCE($12, notes),
+             start_mileage = COALESCE($13, start_mileage),
              updated_at = now()
            WHERE id = $1 RETURNING *`,
           [
@@ -1351,6 +1492,9 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             patch.additional_charges ? JSON.stringify(patch.additional_charges) : null,
             patch.status ?? null,
             patch.notes ?? null,
+            patch.start_mileage !== undefined && patch.start_mileage !== null && patch.start_mileage !== ''
+              ? Number(patch.start_mileage)
+              : null,
           ],
         )
 
@@ -1378,10 +1522,18 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         return this.get(id)
       },
 
-      async returnCar(id, { actual_return_at, additional_charges, notes }, actor) {
+      async returnCar(id, { actual_return_at, additional_charges, notes, end_mileage }, actor) {
         const current = await one('SELECT * FROM rentals WHERE id = $1', [id])
         if (!current) throw new Error('Rental not found')
         if (current.actual_return_at) throw new Error('This rental has already been closed.')
+
+        const endMileage = Number(end_mileage)
+        if (!Number.isFinite(endMileage) || endMileage < 0) {
+          throw new Error('Enter the vehicle mileage at return.')
+        }
+        if (current.start_mileage != null && endMileage < num(current.start_mileage)) {
+          throw new Error('The return mileage cannot be less than the pickup mileage.')
+        }
 
         const returnedAt = actual_return_at || new Date().toISOString()
         const days = Math.max(1, daysBetween(current.pickup_at, returnedAt))
@@ -1399,6 +1551,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         await rows(
           `UPDATE rentals SET actual_return_at = $2, days = $3, total_amount = $4,
                               additional_charges = $5::jsonb, status = 'completed',
+                              end_mileage = $7,
                               notes = COALESCE($6, notes), updated_at = now()
            WHERE id = $1`,
           [
@@ -1408,11 +1561,13 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             num(current.daily_rate) * days,
             JSON.stringify(charges),
             notes ?? null,
+            endMileage,
           ],
         )
-        await rows(`UPDATE cars SET status = 'available', updated_at = now() WHERE id = $1`, [
-          current.car_id,
-        ])
+        await rows(
+          `UPDATE cars SET status = 'available', mileage = $2, updated_at = now() WHERE id = $1`,
+          [current.car_id, endMileage],
+        )
 
         const car = await one('SELECT make, model, registration FROM cars WHERE id = $1', [
           current.car_id,
@@ -1544,6 +1699,106 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           entity_id: id,
           summary: 'Removed a payment record',
           metadata: { amount: payment.amount },
+        })
+        return { removed: true }
+      },
+    },
+
+    /* =========================================================== cashbook */
+    cashbook: {
+      async list({ companyId, direction, scope, carId, from, to } = {}) {
+        const f = filters()
+          .eq('e.company_id', companyId)
+          .eq('e.direction', direction)
+          .eq('e.expense_scope', scope)
+          .eq('e.car_id', carId)
+          .op('e.occurred_at', '>=', from)
+          .op('e.occurred_at', '<=', to)
+        const list = await rows(
+          `SELECT e.*, (c.make || ' ' || c.model) AS car_label, c.registration AS car_registration,
+                  to_jsonb(u.*) - 'company_id' - 'password_hash' AS recorded_by_user
+           FROM cashbook_entries e
+           LEFT JOIN cars c ON c.id = e.car_id
+           LEFT JOIN users u ON u.id = e.recorded_by
+           ${f.where()}
+           ORDER BY e.occurred_at DESC`,
+          f.params,
+        )
+        return list.map((entry) => ({ ...entry, amount: num(entry.amount) }))
+      },
+
+      async create(input, actor) {
+        if (input.id) {
+          const existing = await one('SELECT * FROM cashbook_entries WHERE id = $1', [input.id])
+          if (existing) return { ...existing, amount: num(existing.amount) }
+        }
+        const direction = input.direction === 'inflow' ? 'inflow' : 'expense'
+        const value = Number(input.amount)
+        if (!(value > 0)) throw new Error('Amount must be greater than zero.')
+        if (!String(input.category || '').trim()) throw new Error('Choose a category.')
+
+        // An inflow is never scoped to a vehicle; a fleet expense must be.
+        let scope = direction === 'inflow' ? 'company' : (input.expense_scope || 'company')
+        let carId = null
+        if (direction === 'expense' && scope === 'fleet') {
+          const car = await one('SELECT id FROM cars WHERE id = $1 AND company_id = $2', [
+            input.car_id,
+            input.company_id,
+          ])
+          if (!car) throw new Error('Vehicle not found.')
+          carId = car.id
+        } else {
+          scope = 'company'
+        }
+
+        const entry = await one(
+          `INSERT INTO cashbook_entries
+             (id, company_id, direction, expense_scope, car_id, category, description,
+              amount, method, reference, occurred_at, recorded_by)
+           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11::timestamptz, now()),$12)
+           RETURNING *`,
+          [
+            input.id || null,
+            input.company_id,
+            direction,
+            scope,
+            carId,
+            String(input.category).trim(),
+            input.description || null,
+            value,
+            input.method || 'cash',
+            input.reference || null,
+            input.occurred_at || null,
+            actor?.id || null,
+          ],
+        )
+        await logActivity({
+          company_id: entry.company_id,
+          user_id: actor?.id || null,
+          action: direction === 'inflow' ? 'cashbook.inflow' : 'cashbook.expense',
+          entity: 'cashbook',
+          entity_id: entry.id,
+          summary:
+            direction === 'inflow'
+              ? `Recorded cashbook inflow ${entry.category} (${value})`
+              : `Recorded ${scope === 'fleet' ? 'fleet' : 'company'} expense ${entry.category} (${value})`,
+          metadata: { amount: value, scope },
+        })
+        return { ...entry, amount: num(entry.amount) }
+      },
+
+      async remove(id, actor) {
+        const entry = await one('SELECT * FROM cashbook_entries WHERE id = $1', [id])
+        if (!entry) throw new Error('Entry not found.')
+        await rows('DELETE FROM cashbook_entries WHERE id = $1', [id])
+        await logActivity({
+          company_id: entry.company_id,
+          user_id: actor?.id || null,
+          action: 'cashbook.deleted',
+          entity: 'cashbook',
+          entity_id: id,
+          summary: 'Removed a cashbook entry',
+          metadata: { amount: num(entry.amount) },
         })
         return { removed: true }
       },

@@ -1,6 +1,6 @@
 import { buildSeed } from './seed'
 
-const STORAGE_KEY = 'carrental.db.v1'
+const STORAGE_KEY = 'carrental.db.v2'
 const EVENT_NAME = 'carrental:db-change'
 
 let cache = null

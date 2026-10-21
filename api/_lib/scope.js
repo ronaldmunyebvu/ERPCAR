@@ -22,7 +22,7 @@ export class ApiError extends Error {
 
 /** Table names are compile-time constants from the manifest, never request input. */
 function assertKnownTable(table) {
-  if (!['users', 'cars', 'customers', 'rentals', 'payments'].includes(table)) {
+  if (!['users', 'cars', 'customers', 'rentals', 'payments', 'cashbook_entries'].includes(table)) {
     throw new ApiError('Unknown table in operation manifest.', 500)
   }
   return table

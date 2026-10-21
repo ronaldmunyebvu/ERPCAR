@@ -61,6 +61,11 @@ export const OPERATIONS = {
   'auth.signIn': { auth: 'public' },
   'auth.requestPasswordReset': { auth: 'public', guard: 'resetTokenPolicy' },
   'auth.completePasswordReset': { auth: 'public' },
+  // First-time member setup (email a code, then choose a password) is not on
+  // the data path at all: completing it must issue a session cookie, which
+  // only `api/_lib/handler-auth.js` can do (actions `requestMemberSetup` and
+  // `completeMemberSetup`). The repository methods it drives are shared with
+  // the mock so demo mode behaves identically.
   'auth.findUserById': { auth: 'member', force: [{ index: 0, key: null, from: FROM.USER }] },
   'auth.changeOwnPassword': {
     auth: 'member',
@@ -160,6 +165,19 @@ export const OPERATIONS = {
     actor: 1,
   },
   'payments.remove': { auth: 'member', own: 'payments', actor: 1 },
+
+  /* -------------------------------------------------------------- cashbook */
+  // Manual money movements (not rental payments). A fleet expense's car_id is
+  // validated inside the repository against the tenant's own fleet, because a
+  // bare id is optional here and the manifest's owner rules cannot express
+  // "check only when present".
+  'cashbook.list': { auth: 'member', force: [{ index: 0, key: 'companyId', from: FROM.COMPANY }] },
+  'cashbook.create': {
+    auth: 'member',
+    force: [{ index: 0, key: 'company_id', from: FROM.COMPANY }],
+    actor: 1,
+  },
+  'cashbook.remove': { auth: 'member', own: 'cashbook_entries', actor: 1 },
 
   /* -------------------------------------------------------------- activity */
   'activity.list': { auth: 'member', force: [{ index: 0, key: 'companyId', from: FROM.COMPANY }] },

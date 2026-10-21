@@ -41,6 +41,7 @@ import {
   formatMoney,
   formatDate,
   formatDateTime,
+  formatNumber,
   daysBetween,
   currencySymbol,
   toDateTimeInput,
@@ -180,6 +181,18 @@ export default function RentalDetailPage() {
                 <Detail label="Days late" value={`${lateDays} day${lateDays === 1 ? '' : 's'}`} tone="danger" />
               )}
               <Detail label="Deposit held" value={money(data.deposit_amount)} />
+              {data.start_mileage != null && (
+                <Detail
+                  label="Odometer at pickup"
+                  value={`${formatNumber(data.start_mileage)} km`}
+                />
+              )}
+              {data.start_mileage != null && data.end_mileage != null && (
+                <Detail
+                  label="Distance covered"
+                  value={`${formatNumber(Math.max(0, data.end_mileage - data.start_mileage))} km`}
+                />
+              )}
               <Detail
                 label="Captured by"
                 value={`${data.created_by_user?.full_name || '—'}`}
@@ -407,7 +420,7 @@ export default function RentalDetailPage() {
 
 function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
   const defaultReturn = rental.actual_return_at ? toDateTimeInput(rental.actual_return_at) : toDateTimeInput(new Date())
-  const [values, setValues] = useState({ actual_return_at: defaultReturn, notes: rental.notes || '', charges: rental.additional_charges || [] })
+  const [values, setValues] = useState({ actual_return_at: defaultReturn, end_mileage: '', notes: rental.notes || '', charges: rental.additional_charges || [] })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -415,6 +428,7 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
     if (open) {
       setValues({
         actual_return_at: toDateTimeInput(new Date()),
+        end_mileage: '',
         notes: rental.notes || '',
         charges: (rental.additional_charges || []).map((charge) => ({ ...charge })),
       })
@@ -432,6 +446,11 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
   const newTotal = rental.daily_rate * days + extras + autoLateFee
   const alreadyPaid = rental.computed_paid
   const balance = Math.max(0, newTotal - alreadyPaid)
+  const endMileage = values.end_mileage === '' ? null : Number(values.end_mileage)
+  const distanceCovered =
+    endMileage != null && rental.start_mileage != null
+      ? endMileage - Number(rental.start_mileage)
+      : null
 
   const submit = async (event) => {
     event.preventDefault()
@@ -440,10 +459,19 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
       setError('Return time cannot be before the pickup time.')
       return
     }
+    if (endMileage == null || Number.isNaN(endMileage) || endMileage < 0) {
+      setError('Enter the vehicle mileage at return.')
+      return
+    }
+    if (rental.start_mileage != null && endMileage < Number(rental.start_mileage)) {
+      setError('The return mileage cannot be less than the pickup mileage.')
+      return
+    }
     setBusy(true)
     try {
       await onSubmit({
         actual_return_at: new Date(values.actual_return_at).toISOString(),
+        end_mileage: endMileage,
         notes: values.notes,
         additional_charges: [
           ...values.charges.filter((charge) => charge.label?.trim()),
@@ -489,8 +517,27 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
               onChange={(event) => setValues({ ...values, actual_return_at: event.target.value })}
             />
           </Field>
-          <Field label="Total days out" hint={`Daily rate ${formatMoney(rental.daily_rate, currency)}`}>
-            <Input value={days} readOnly disabled />
+          <Field
+            label="Odometer at return (km)"
+            required
+            hint={
+              rental.start_mileage != null
+                ? `Pickup reading: ${formatNumber(rental.start_mileage)} km${
+                    distanceCovered != null && distanceCovered >= 0
+                      ? ` · Distance: ${formatNumber(distanceCovered)} km`
+                      : ''
+                  }`
+                : 'Recorded at handover.'
+            }
+          >
+            <Input
+              type="number"
+              min="0"
+              step="1"
+              value={values.end_mileage}
+              onChange={(event) => setValues({ ...values, end_mileage: event.target.value })}
+              placeholder="e.g. 45890"
+            />
           </Field>
         </div>
 

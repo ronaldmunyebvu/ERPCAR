@@ -18,6 +18,8 @@ const MUTATIONS = new Set([
   'rentals.remove',
   'payments.create',
   'payments.remove',
+  'cashbook.create',
+  'cashbook.remove',
 ])
 
 let localRepositoryPromise = null

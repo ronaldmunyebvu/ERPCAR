@@ -22,6 +22,7 @@ import {
   Checkbox,
 } from '@/components/ui'
 import { RoleBadge, StatusBadge } from '@/components/domain/Badges'
+import { DUTIES } from '@/lib/duties'
 import { formatDate, formatDateTime, relativeTime } from '@/lib/utils'
 
 export default function MembersPage() {
@@ -50,14 +51,22 @@ export default function MembersPage() {
 
   const rows = members.data || []
   const filtered = rows.filter((member) =>
-    tab === 'all' ? true : tab === 'active' ? member.status === 'active' : member.role === 'admin',
+    tab === 'all'
+      ? true
+      : tab === 'active'
+        ? member.status === 'active'
+        : tab === 'setup'
+          ? member.has_password === false
+          : member.role === 'admin',
   )
 
   const createMember = async (values) => {
     setBusy(true)
     try {
       await repository.auth.createUser({ ...values, company_id: companyId, created_by: user.id })
-      toast.success(`${values.full_name} can now sign in with the password you set.`)
+      toast.success(
+        `${values.full_name} created. They set their own password from “Set up your account” on the sign-in page.`,
+      )
       setCreating(false)
       members.reload()
       activity.reload()
@@ -128,9 +137,11 @@ export default function MembersPage() {
       />
 
       <Alert tone="info" icon={Info} title="How staff access works" className="mb-4">
-        Members sign in with the email and password you set. They can capture rentals, manage
-        customers and record payments, but cannot see company settings, manage staff or view other
-        members&apos; bookings unless you allow it below.
+        Create the account with a role and the duties they need — no password is set here. The
+        member signs in with their email, chooses <strong>Member</strong>, enters the company name,
+        then uses <strong>Set up your account</strong> once to verify by code and choose their own
+        password. Duties control which sections they can open; a member with none selected has
+        full access.
       </Alert>
 
       <Card>
@@ -157,6 +168,11 @@ export default function MembersPage() {
               label: 'Admins',
               count: rows.filter((member) => member.role === 'admin').length,
             },
+            {
+              value: 'setup',
+              label: 'Awaiting setup',
+              count: rows.filter((member) => member.has_password === false).length,
+            },
           ]}
           value={tab}
           onChange={setTab}
@@ -172,6 +188,7 @@ export default function MembersPage() {
               <tr>
                 <th>Member</th>
                 <th>Role</th>
+                <th>Duties</th>
                 <th>Status</th>
                 <th className="text-right">Rentals captured</th>
                 <th>Last sign-in</th>
@@ -192,7 +209,29 @@ export default function MembersPage() {
                     <RoleBadge role={member.role} size="sm" />
                   </td>
                   <td>
-                    <StatusBadge status={member.status} size="sm" />
+                    {member.role === 'admin' ? (
+                      <span className="text-xs text-ink-500">Full access</span>
+                    ) : (member.duties || []).length === 0 ? (
+                      <span className="text-xs text-ink-400">Full access (none selected)</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {DUTIES.filter((duty) => member.duties.includes(duty.key)).map((duty) => (
+                          <Badge key={duty.key} tone="info" size="sm">
+                            {duty.label}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <StatusBadge status={member.status} size="sm" />
+                      {member.has_password === false && (
+                        <Badge tone="warning" size="sm">
+                          Awaiting setup
+                        </Badge>
+                      )}
+                    </div>
                   </td>
                   <td className="text-right tabular-nums">{member.rentals_captured || 0}</td>
                   <td className="text-ink-600">
@@ -342,11 +381,10 @@ function MemberModal({ open, member, busy, onClose, onSubmit }) {
     phone: '',
     role: 'member',
     status: 'active',
-    password: '',
+    duties: [],
   })
   const [errors, setErrors] = useState({})
   const [key, setKey] = useState('')
-  const [copied, setCopied] = useState(false)
 
   const identity = member?.id || (open ? 'new' : '')
   if (identity !== key) {
@@ -357,47 +395,42 @@ function MemberModal({ open, member, busy, onClose, onSubmit }) {
       phone: member?.phone || '',
       role: member?.role || 'member',
       status: member?.status || 'active',
-      password: '',
+      duties: Array.isArray(member?.duties) ? [...member.duties] : [],
     })
     setErrors({})
-    setCopied(false)
   }
 
   const set = (field) => (event) => setValues((current) => ({ ...current, [field]: event.target.value }))
 
-  const password = values.password
+  const toggleDuty = (dutyKey) => () =>
+    setValues((current) => ({
+      ...current,
+      duties: current.duties.includes(dutyKey)
+        ? current.duties.filter((value) => value !== dutyKey)
+        : [...current.duties, dutyKey],
+    }))
 
   const submit = (event) => {
     event.preventDefault()
     const found = {}
     if (!values.full_name.trim()) found.full_name = 'Full name is required.'
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) found.email = 'Enter a valid email address.'
-    if (!isEdit && password.length < 8) found.password = 'Set a password of at least 8 characters.'
-    if (isEdit && values.password && values.password.length < 8) {
-      found.password = 'Passwords must be at least 8 characters.'
+    if (!values.role) found.role = 'Choose a role.'
+    if (values.role === 'member' && values.duties.length === 0) {
+      found.duties = 'Pick at least one duty, or switch the role to admin for full access.'
     }
     setErrors(found)
     if (Object.keys(found).length > 0) return
 
-    if (isEdit) {
-      const patch = {
-        full_name: values.full_name,
-        email: values.email,
-        phone: values.phone,
-        role: values.role,
-        status: values.status,
-      }
-      if (values.password) patch.password = values.password
-      onSubmit(patch)
-    } else {
-      onSubmit({ ...values, password })
+    const patch = {
+      full_name: values.full_name,
+      email: values.email,
+      phone: values.phone,
+      role: values.role,
+      status: values.status,
+      duties: values.role === 'admin' ? [] : values.duties,
     }
-  }
-
-  const copy = async () => {
-    await navigator.clipboard.writeText(password)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1800)
+    onSubmit(patch)
   }
 
   return (
@@ -407,8 +440,8 @@ function MemberModal({ open, member, busy, onClose, onSubmit }) {
       title={isEdit ? `Edit ${member.full_name}` : 'Add staff member'}
       description={
         isEdit
-          ? 'Update the details, role or status of this account.'
-          : 'Create a sign-in for a staff member. Share the password securely.'
+          ? 'Update the details, role or duties of this account.'
+          : 'Create the account without a password — the member sets their own on first sign-in.'
       }
       footer={
         <>
@@ -437,8 +470,13 @@ function MemberModal({ open, member, busy, onClose, onSubmit }) {
           <Field label="Phone">
             <Input value={values.phone} onChange={set('phone')} />
           </Field>
-          <Field label="Role" hint="Admins have full access to everything.">
-            <Select value={values.role} onChange={set('role')}>
+          <Field
+            label="Role"
+            required
+            error={errors.role}
+            hint="Admins have full access to everything."
+          >
+            <Select value={values.role} onChange={set('role')} invalid={Boolean(errors.role)}>
               <option value="member">Member (staff)</option>
               <option value="admin">Admin (owner)</option>
             </Select>
@@ -451,33 +489,34 @@ function MemberModal({ open, member, busy, onClose, onSubmit }) {
               </Select>
             </Field>
           )}
+        </div>
+
+        {values.role === 'member' && (
           <Field
-            label={isEdit ? 'New password' : 'Password'}
-            required={!isEdit}
-            error={errors.password}
-            hint={isEdit ? 'Leave blank to keep the current password.' : 'Minimum 8 characters.'}
+            label="Duties"
+            required
+            error={errors.duties}
+            hint="Tick the sections this member may open. Leaving all unticked grants full access."
           >
-            <div className="flex gap-2">
-              <Input
-                type="text"
-                value={password}
-                onChange={set('password')}
-                placeholder="e.g. Temp@2026"
-                className="font-mono"
-                invalid={Boolean(errors.password)}
-              />
-              <Button variant="secondary" onClick={copy} type="button" title="Copy password">
-                {copied ? <Check size={15} /> : <Copy size={15} />}
-              </Button>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {DUTIES.map((duty) => (
+                <Checkbox
+                  key={duty.key}
+                  label={duty.label}
+                  description={duty.description}
+                  checked={values.duties.includes(duty.key)}
+                  onChange={toggleDuty(duty.key)}
+                />
+              ))}
             </div>
           </Field>
-        </div>
+        )}
 
         {!isEdit && (
           <Alert tone="info" icon={Info}>
-            Give this member their email and password. They can change it later from
-            <strong> Account → Change password</strong>, or use <em>Forgot password</em> on the
-            sign-in screen.
+            No password is set here. Give this member their email and the company name; they open
+            <strong> Set up your account</strong> on the sign-in page, verify with the code we email
+            them, and choose their own password.
           </Alert>
         )}
       </form>

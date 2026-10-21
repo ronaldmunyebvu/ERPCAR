@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS users (
   full_name      text        NOT NULL,
   email          text        NOT NULL,
   phone          text,
-  password_hash  text        NOT NULL,
+  -- Nullable: staff created before their first sign-in have no password yet.
+  password_hash  text,
   role           user_role   NOT NULL DEFAULT 'member',
   status         user_status NOT NULL DEFAULT 'active',
   avatar_url     text,
@@ -72,6 +73,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_email_key ON users (lower(email));
 -- Everyone else (staff added by an admin, demo data) is already trusted, so
 -- the column defaults to true and company setup is the only writer of false.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT true;
+
+-- Which sections of the app a staff member may use. Empty (or null on older
+-- rows) is treated as full access, so no account is ever locked out by the
+-- migration; the app fills it in on the next save.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS duties text[] NOT NULL DEFAULT '{}';
 
 -- password reset tokens (short lived, single use)
 CREATE TABLE IF NOT EXISTS password_resets (
@@ -94,15 +100,13 @@ ALTER TABLE password_resets ADD COLUMN IF NOT EXISTS attempts integer   NOT NULL
 CREATE INDEX IF NOT EXISTS password_resets_live_idx
   ON password_resets (user_id, purpose, created_at DESC);
 
+-- Recreate (idempotently) so an older two-value check gains the new purpose.
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'password_resets_purpose_check'
-  ) THEN
-    ALTER TABLE password_resets
-      ADD CONSTRAINT password_resets_purpose_check
-      CHECK (purpose IN ('password_reset', 'email_confirm'));
-  END IF;
+  ALTER TABLE password_resets DROP CONSTRAINT IF EXISTS password_resets_purpose_check;
+  ALTER TABLE password_resets
+    ADD CONSTRAINT password_resets_purpose_check
+    CHECK (purpose IN ('password_reset', 'email_confirm', 'member_setup'));
 END $$;
 
 -- -------------------------------------------------------------------- cars
@@ -117,6 +121,8 @@ CREATE TABLE IF NOT EXISTS cars (
   category       text        NOT NULL DEFAULT 'sedan',
   daily_rate     numeric(12,2) NOT NULL DEFAULT 0 CHECK (daily_rate >= 0),
   status         car_status  NOT NULL DEFAULT 'available',
+  -- Odometer reading kept up to date on every completed rental return.
+  mileage        int         NOT NULL DEFAULT 0 CHECK (mileage >= 0),
   photo_url      text,
   notes          text,
   created_at     timestamptz NOT NULL DEFAULT now(),
@@ -184,6 +190,9 @@ CREATE TABLE IF NOT EXISTS rentals (
   deposit_amount      numeric(12,2) NOT NULL DEFAULT 0 CHECK (deposit_amount >= 0),
   additional_charges  jsonb       NOT NULL DEFAULT '[]'::jsonb,
   status              rental_status NOT NULL DEFAULT 'active',
+  -- Odometer readings at pickup and return; distance covered is derived.
+  start_mileage       int,
+  end_mileage         int,
   notes               text,
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now()
@@ -211,6 +220,34 @@ CREATE TABLE IF NOT EXISTS payments (
 
 CREATE INDEX IF NOT EXISTS payments_rental_idx  ON payments (rental_id);
 CREATE INDEX IF NOT EXISTS payments_company_idx ON payments (company_id, received_at);
+
+-- ------------------------------------------------------------- cashbook
+-- Manual money movements that are not rental payments: company overheads,
+-- fleet running costs, and non-rental income. Rental inflows stay in
+-- `payments`; the Cashbook page merges both views.
+CREATE TABLE IF NOT EXISTS cashbook_entries (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id   uuid           NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  direction    text           NOT NULL CHECK (direction IN ('inflow', 'expense')),
+  -- Expenses are either general company overhead or a cost on one vehicle.
+  expense_scope text          NOT NULL DEFAULT 'company' CHECK (expense_scope IN ('company', 'fleet')),
+  car_id       uuid           REFERENCES cars(id) ON DELETE SET NULL,
+  category     text           NOT NULL,
+  description  text,
+  amount       numeric(12,2)  NOT NULL CHECK (amount > 0),
+  method       payment_method NOT NULL DEFAULT 'cash',
+  reference    text,
+  occurred_at  timestamptz    NOT NULL DEFAULT now(),
+  recorded_by  uuid           REFERENCES users(id) ON DELETE SET NULL,
+  created_at   timestamptz    NOT NULL DEFAULT now(),
+  -- A fleet-scope expense must point at the vehicle it belongs to.
+  CONSTRAINT cashbook_entries_fleet_car_check
+    CHECK (direction <> 'expense' OR expense_scope <> 'fleet' OR car_id IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS cashbook_company_idx   ON cashbook_entries (company_id, occurred_at);
+CREATE INDEX IF NOT EXISTS cashbook_car_idx       ON cashbook_entries (car_id);
+CREATE INDEX IF NOT EXISTS cashbook_scope_idx     ON cashbook_entries (company_id, direction, expense_scope);
 
 -- ----------------------------------------------------------- activity log
 CREATE TABLE IF NOT EXISTS activity_log (

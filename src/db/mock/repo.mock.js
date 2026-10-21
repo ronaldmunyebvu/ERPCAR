@@ -1,6 +1,7 @@
 import { loadDatabase, commit, resetDatabase, onDatabaseChange, exportDatabase } from './store'
 import { buildSeed } from './seed'
 import { hashPassword, verifyPassword, randomToken, randomDigits } from '@/lib/crypto'
+import { normaliseDuties } from '@/lib/duties'
 import {
   uid,
   isOverdue,
@@ -107,6 +108,7 @@ function publicCar(car) {
     license_valid_from: null,
     license_valid_to: null,
     license_renewed_at: null,
+    mileage: 0,
     ...clone(car),
   }
 }
@@ -246,13 +248,25 @@ export function createMockRepository() {
         }
       },
 
-      async signIn({ email, password }) {
+      async signIn({ email, password, role, company }) {
         const data = await db()
         const user = data.users.find(
           (item) => item.email.toLowerCase() === String(email).trim().toLowerCase(),
         )
         if (!user) throw new Error('No account found for that email address.')
         if (user.status !== 'active') throw new Error('This account has been deactivated. Contact your admin.')
+        if (!user.password_hash) {
+          throw new Error(
+            'This account has no password yet. Use "Set up your account" on the sign-in page first.',
+          )
+        }
+        if (role === 'member' && company) {
+          const ownCompany = data.companies.find((item) => item.id === user.company_id)
+          const matches =
+            ownCompany &&
+            String(ownCompany.name).trim().toLowerCase() === String(company).trim().toLowerCase()
+          if (!matches) throw new Error('No account found for that email address.')
+        }
         const ok = await verifyPassword(password, user.password_hash)
         if (!ok) throw new Error('Incorrect password. Please try again.')
         // Checked after the password so an unconfirmed address cannot be used
@@ -266,7 +280,7 @@ export function createMockRepository() {
         }
         user.last_login_at = new Date().toISOString()
         user.updated_at = user.last_login_at
-        const company = data.companies.find((item) => item.id === user.company_id)
+        const companyRecord = data.companies.find((item) => item.id === user.company_id)
         logActivity(data, {
           company_id: user.company_id,
           user_id: user.id,
@@ -276,7 +290,7 @@ export function createMockRepository() {
           summary: `${user.full_name} signed in`,
         })
         commit()
-        return { user: publicUser(user), company: clone(company) }
+        return { user: publicUser(user), company: clone(companyRecord) }
       },
 
       async signOut() {},
@@ -342,16 +356,20 @@ export function createMockRepository() {
           if (admins.length > 0) throw new Error('This company already has an active owner/admin account.')
         }
         const timestamp = new Date().toISOString()
+        const duties = normaliseDuties(input.duties, input.role || 'member')
         const user = {
           id: uid('usr_'),
           company_id: input.company_id,
           full_name: input.full_name.trim(),
           email,
           phone: input.phone || '',
-          password_hash: await hashPassword(input.password),
+          // Staff pick their own password on first sign-in.
+          password_hash: input.password ? await hashPassword(input.password) : null,
           role: input.role || 'member',
           status: input.status || 'active',
           avatar_url: '',
+          email_verified: true,
+          duties,
           last_login_at: null,
           created_at: timestamp,
           updated_at: timestamp,
@@ -364,10 +382,10 @@ export function createMockRepository() {
           entity: 'user',
           entity_id: user.id,
           summary: `Created ${user.role} account ${user.email}`,
-          metadata: { email: user.email, role: user.role },
+          metadata: { email: user.email, role: user.role, duties },
         })
         commit()
-        return publicUser(user)
+        return { ...publicUser(user), has_password: Boolean(input.password) }
       },
 
       async updateUser(id, patch, actor) {
@@ -382,6 +400,9 @@ export function createMockRepository() {
           next.email = email
         }
         if (patch.password) next.password_hash = await hashPassword(patch.password)
+        if (patch.duties !== undefined) {
+          next.duties = normaliseDuties(patch.duties, patch.role || next.role)
+        }
         if (next.role !== 'admin' && user.role === 'admin') {
           const admins = data.users.filter(
             (item) => item.company_id === user.company_id && item.role === 'admin' && item.status === 'active',
@@ -565,6 +586,115 @@ export function createMockRepository() {
         commit()
         return publicUser(user)
       },
+
+      /**
+       * First-time member verification. Demo mode has no mail server, so the
+       * code is returned for the screen to show — production strips it.
+       */
+      async requestMemberVerification({ email, company }) {
+        const data = await db()
+        const user = data.users.find(
+          (item) => item.email.toLowerCase() === String(email || '').trim().toLowerCase(),
+        )
+        const emailOut = String(email || '').trim().toLowerCase()
+        if (!user || !company) return { ok: true, token: null, user: null, email: emailOut }
+        const ownCompany = data.companies.find((item) => item.id === user.company_id)
+        const matches =
+          ownCompany &&
+          String(ownCompany.name).trim().toLowerCase() === String(company).trim().toLowerCase()
+        if (!matches) return { ok: true, token: null, user: null, email: emailOut }
+
+        data.password_resets = data.password_resets || []
+        for (const item of data.password_resets) {
+          if (item.user_id === user.id && item.purpose === 'member_setup' && !item.used_at) {
+            item.used_at = new Date().toISOString()
+          }
+        }
+        const code = randomDigits(6)
+        data.password_resets.push({
+          id: uid('prs_'),
+          user_id: user.id,
+          token: code,
+          purpose: 'member_setup',
+          attempts: 0,
+          expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+          used_at: null,
+          created_at: new Date().toISOString(),
+        })
+        commit()
+        return { ok: true, token: code, user: publicUser(user), email: user.email }
+      },
+
+      /** Finishes first-time verification and signs the member in. */
+      async completeMemberVerification({ email, company, token, password }) {
+        const data = await db()
+        const secret = String(token ?? '')
+        if (String(password || '').length < 8) {
+          throw new Error('Choose a password with at least 8 characters.')
+        }
+        const user = data.users.find(
+          (item) => item.email.toLowerCase() === String(email || '').trim().toLowerCase(),
+        )
+        const fail = () =>
+          new Error('This verification code is invalid or has expired. Please request a new one.')
+        if (!user || !company) throw fail()
+        const ownCompany = data.companies.find((item) => item.id === user.company_id)
+        if (
+          !ownCompany ||
+          String(ownCompany.name).trim().toLowerCase() !== String(company).trim().toLowerCase()
+        ) {
+          throw fail()
+        }
+
+        const live = (data.password_resets || []).filter(
+          (item) =>
+            item.user_id === user.id &&
+            item.purpose === 'member_setup' &&
+            !item.used_at &&
+            toDate(item.expires_at) > new Date(),
+        )
+        const credential = live.sort(
+          (a, b) => toDate(b.created_at) - toDate(a.created_at),
+        )[0]
+        if (!credential) throw fail()
+        if (credential.attempts >= 5) {
+          credential.used_at = new Date().toISOString()
+          commit()
+          throw new Error('Too many attempts. Please request a new code.')
+        }
+        if (credential.token !== secret) {
+          credential.attempts = (credential.attempts || 0) + 1
+          if (credential.attempts >= 5) credential.used_at = new Date().toISOString()
+          commit()
+          throw new Error(
+            credential.attempts >= 5
+              ? 'Too many attempts. Please request a new code.'
+              : 'That code is incorrect. Please try again.',
+          )
+        }
+
+        const timestamp = new Date().toISOString()
+        user.password_hash = await hashPassword(password)
+        user.email_verified = true
+        user.last_login_at = timestamp
+        user.updated_at = timestamp
+        for (const item of data.password_resets) {
+          if (item.user_id === user.id && item.purpose === 'member_setup' && !item.used_at) {
+            item.used_at = timestamp
+          }
+        }
+        logActivity(data, {
+          company_id: user.company_id,
+          user_id: user.id,
+          action: 'user.setup_completed',
+          entity: 'user',
+          entity_id: user.id,
+          summary: `${user.full_name} completed first-time account setup`,
+        })
+        commit()
+        const companyRecord = data.companies.find((item) => item.id === user.company_id)
+        return { user: publicUser(user), company: clone(companyRecord) }
+      },
     },
 
     /* ========================================================== companies */
@@ -618,6 +748,7 @@ export function createMockRepository() {
           }, {})
         return sortBy(rows, 'full_name').map((user) => ({
           ...publicUser(user),
+          has_password: Boolean(user.password_hash),
           rentals_captured: counts[user.id] || 0,
         }))
       },
@@ -684,6 +815,7 @@ export function createMockRepository() {
           category: input.category || 'sedan',
           daily_rate: Number(input.daily_rate) || 0,
           status: input.status || 'available',
+          mileage: Number(input.mileage) || 0,
           photo_url: input.photo_url || '',
           notes: input.notes || '',
           ownership: 'owned',
@@ -988,6 +1120,10 @@ export function createMockRepository() {
 
       async create(input, actor) {
         const data = await db()
+        const startMileage = Number(input.start_mileage)
+        if (!Number.isFinite(startMileage) || startMileage < 0) {
+          throw new Error('Enter the vehicle mileage at pickup.')
+        }
         const car = assertFound(data.cars.find((item) => item.id === input.car_id), 'Vehicle')
         const customer = assertFound(
           data.customers.find((item) => item.id === input.customer_id),
@@ -1042,6 +1178,8 @@ export function createMockRepository() {
           deposit_amount: Number(input.deposit_amount) || 0,
           additional_charges: Array.isArray(input.additional_charges) ? clone(input.additional_charges) : [],
           status: 'active',
+          start_mileage: startMileage,
+          end_mileage: null,
           notes: input.notes || '',
           created_at: timestamp,
           updated_at: timestamp,
@@ -1117,10 +1255,18 @@ export function createMockRepository() {
       },
 
       /** Marks a car as returned, recalculates the bill and frees the vehicle. */
-      async returnCar(id, { actual_return_at, additional_charges, notes }, actor) {
+      async returnCar(id, { actual_return_at, additional_charges, notes, end_mileage }, actor) {
         const data = await db()
         const rental = assertFound(data.rentals.find((item) => item.id === id), 'Rental')
         if (rental.actual_return_at) throw new Error('This rental has already been closed.')
+
+        const endMileage = Number(end_mileage)
+        if (!Number.isFinite(endMileage) || endMileage < 0) {
+          throw new Error('Enter the vehicle mileage at return.')
+        }
+        if (rental.start_mileage != null && endMileage < Number(rental.start_mileage)) {
+          throw new Error('The return mileage cannot be less than the pickup mileage.')
+        }
 
         const returnedAt = actual_return_at || new Date().toISOString()
         const days = Math.max(1, daysBetween(rental.pickup_at, returnedAt))
@@ -1138,12 +1284,14 @@ export function createMockRepository() {
         rental.additional_charges = charges
         rental.total_amount = rental.daily_rate * days
         rental.status = 'completed'
+        rental.end_mileage = endMileage
         rental.notes = notes ?? rental.notes
         rental.updated_at = new Date().toISOString()
 
         const car = data.cars.find((item) => item.id === rental.car_id)
         if (car) {
           car.status = 'available'
+          car.mileage = endMileage
           car.updated_at = new Date().toISOString()
         }
 
@@ -1269,6 +1417,105 @@ export function createMockRepository() {
           entity_id: id,
           summary: 'Removed a payment record',
           metadata: { amount: payment.amount },
+        })
+        commit()
+        return { removed: true }
+      },
+    },
+
+    /* =========================================================== cashbook */
+    cashbook: {
+      async list({ companyId, direction, scope, carId, from, to } = {}) {
+        const data = await db()
+        let rows = (data.cashbook || []).filter((entry) => entry.company_id === companyId)
+        if (direction) rows = rows.filter((entry) => entry.direction === direction)
+        if (scope) rows = rows.filter((entry) => (entry.expense_scope || 'company') === scope)
+        if (carId) rows = rows.filter((entry) => entry.car_id === carId)
+        if (from) rows = rows.filter((entry) => toDate(entry.occurred_at) >= toDate(from))
+        if (to) rows = rows.filter((entry) => toDate(entry.occurred_at) <= toDate(to))
+
+        const carIndex = byId(data.cars)
+        const userIndex = byId(data.users)
+        return sortBy(rows, 'occurred_at', 'desc').map((entry) => ({
+          ...clone(entry),
+          amount: Number(entry.amount),
+          car_label: entry.car_id
+            ? `${carIndex.get(entry.car_id)?.make ?? ''} ${carIndex.get(entry.car_id)?.model ?? ''}`.trim()
+            : null,
+          car_registration: entry.car_id ? carIndex.get(entry.car_id)?.registration || null : null,
+          recorded_by_user: publicUser(userIndex.get(entry.recorded_by)),
+        }))
+      },
+
+      async create(input, actor) {
+        const data = await db()
+        data.cashbook = data.cashbook || []
+        if (input.id) {
+          const existing = data.cashbook.find((item) => item.id === input.id)
+          if (existing) return { ...clone(existing), amount: Number(existing.amount) }
+        }
+        const direction = input.direction === 'inflow' ? 'inflow' : 'expense'
+        const value = Number(input.amount)
+        if (!(value > 0)) throw new Error('Amount must be greater than zero.')
+        if (!String(input.category || '').trim()) throw new Error('Choose a category.')
+
+        let scope = direction === 'inflow' ? 'company' : (input.expense_scope || 'company')
+        let carId = null
+        if (direction === 'expense' && scope === 'fleet') {
+          const car = data.cars.find(
+            (item) => item.id === input.car_id && item.company_id === input.company_id,
+          )
+          if (!car) throw new Error('Vehicle not found.')
+          carId = car.id
+        } else {
+          scope = 'company'
+        }
+
+        const entry = {
+          id: input.id || uid('cbk_'),
+          company_id: input.company_id,
+          direction,
+          expense_scope: scope,
+          car_id: carId,
+          category: String(input.category).trim(),
+          description: input.description || '',
+          amount: value,
+          method: input.method || 'cash',
+          reference: input.reference || '',
+          occurred_at: input.occurred_at || new Date().toISOString(),
+          recorded_by: actor?.id || null,
+          created_at: new Date().toISOString(),
+        }
+        data.cashbook.push(entry)
+        logActivity(data, {
+          company_id: entry.company_id,
+          user_id: actor?.id || null,
+          action: direction === 'inflow' ? 'cashbook.inflow' : 'cashbook.expense',
+          entity: 'cashbook',
+          entity_id: entry.id,
+          summary:
+            direction === 'inflow'
+              ? `Recorded cashbook inflow ${entry.category} (${value})`
+              : `Recorded ${scope === 'fleet' ? 'fleet' : 'company'} expense ${entry.category} (${value})`,
+          metadata: { amount: value, scope },
+        })
+        commit()
+        return { ...clone(entry), amount: Number(entry.amount) }
+      },
+
+      async remove(id, actor) {
+        const data = await db()
+        data.cashbook = data.cashbook || []
+        const entry = assertFound(data.cashbook.find((item) => item.id === id), 'Entry')
+        data.cashbook = data.cashbook.filter((item) => item.id !== id)
+        logActivity(data, {
+          company_id: entry.company_id,
+          user_id: actor?.id || null,
+          action: 'cashbook.deleted',
+          entity: 'cashbook',
+          entity_id: id,
+          summary: 'Removed a cashbook entry',
+          metadata: { amount: Number(entry.amount) },
         })
         commit()
         return { removed: true }

@@ -3,13 +3,14 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Car, Eye, EyeOff, Info } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { getRepository } from '@/db'
-import { Button, Field, Input, Alert, Spinner, Card } from '@/components/ui'
+import { Button, Field, Input, Alert, Spinner, Card, SegmentedControl } from '@/components/ui'
 
 
 export default function LoginPage() {
   const { signIn } = useAuth()
   const navigate = useNavigate()
-  const [form, setForm] = useState({ email: '', password: '' })
+  const [role, setRole] = useState('owner')
+  const [form, setForm] = useState({ email: '', password: '', company: '' })
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -40,7 +41,12 @@ export default function LoginPage() {
     setError(null)
     setBusy(true)
     try {
-      await signIn(form)
+      await signIn({
+        email: form.email,
+        password: form.password,
+        role,
+        company: role === 'member' ? form.company : undefined,
+      })
       navigate('/app', { replace: true })
     } catch (cause) {
       setError(cause.message)
@@ -104,8 +110,8 @@ export default function LoginPage() {
 
           <h2 className="text-2xl font-semibold text-ink-900">Sign in</h2>
           <p className="mt-1 text-sm text-ink-500">
-            Use the credentials issued by your company owner. Staff accounts are created by the
-            admin — there is no public sign-up.
+            Owners sign in with their email. Staff name their company as well — there is no public
+            sign-up.
           </p>
 
           {error && (
@@ -115,6 +121,34 @@ export default function LoginPage() {
           )}
 
           <form onSubmit={submit} className="mt-6 space-y-4">
+            <div>
+              <p className="mb-1.5 text-sm font-medium text-ink-700">Signing in as</p>
+              <SegmentedControl
+                value={role}
+                onChange={(next) => {
+                  setRole(next)
+                  setError(null)
+                }}
+                options={[
+                  { value: 'owner', label: 'Owner / Admin' },
+                  { value: 'member', label: 'Staff member' },
+                ]}
+                className="w-full"
+              />
+            </div>
+
+            {role === 'member' && (
+              <Field label="Company name" required hint="The company your account belongs to.">
+                <Input
+                  autoComplete="organization"
+                  placeholder="e.g. Falcon Car Hire"
+                  value={form.company}
+                  onChange={(event) => setForm({ ...form, company: event.target.value })}
+                  required
+                />
+              </Field>
+            )}
+
             <Field label="Email address" required>
               <Input
                 type="email"
@@ -161,6 +195,19 @@ export default function LoginPage() {
               Sign in
             </Button>
           </form>
+
+          {role === 'member' && (
+            <div className="mt-6 rounded-xl border border-ink-200 bg-ink-50 p-4">
+              <p className="text-sm font-semibold text-ink-800">First time signing in?</p>
+              <p className="mt-1 text-xs leading-5 text-ink-500">
+                If your admin just created your account, verify with a code and choose your own
+                password.
+              </p>
+              <Button variant="secondary" className="mt-3 w-full" onClick={() => navigate('/setup-member')}>
+                Set up your account
+              </Button>
+            </div>
+          )}
 
           <div className="mt-6 rounded-xl border border-brand-200 bg-brand-50 p-4">
             <p className="text-sm font-semibold text-brand-800">Create your car rental</p>

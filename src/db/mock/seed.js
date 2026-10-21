@@ -43,6 +43,7 @@ export async function buildSeed() {
     password_hash: '',
     role,
     status,
+    duties: [],
     avatar_url: '',
     last_login_at: lastLoginDaysAgo === null ? null : addDays(now, lastLoginDaysAgo).toISOString(),
     created_at: addDays(now, -300).toISOString(),
@@ -53,16 +54,17 @@ export async function buildSeed() {
   owner.password_hash = await hashPassword('Admin@123')
 
   const staffDefs = [
-    ['Rudo Chari', 'rudo@falconcarhire.test', 'active', 1],
-    ['Brian Ncube', 'brian@falconcarhire.test', 'active', 2],
-    ['Salma Dube', 'salma@falconcarhire.test', 'inactive', null],
+    ['Rudo Chari', 'rudo@falconcarhire.test', 'active', 1, ['rentals', 'customers', 'cashbook']],
+    ['Brian Ncube', 'brian@falconcarhire.test', 'active', 2, ['rentals', 'fleet', 'maintenance']],
+    ['Salma Dube', 'salma@falconcarhire.test', 'inactive', null, []],
   ]
 
   const users = [owner]
   for (let i = 0; i < staffDefs.length; i += 1) {
-    const [full_name, email, status, lastLogin] = staffDefs[i]
+    const [full_name, email, status, lastLogin, duties] = staffDefs[i]
     const record = user(staffIds[i], full_name, email, 'member', status, lastLogin)
     record.password_hash = await hashPassword('Member@123')
+    record.duties = duties
     users.push(record)
   }
 
@@ -81,6 +83,8 @@ export async function buildSeed() {
     ['Toyota', 'Land Cruiser', 2023, 'FCH-6609', 'White', 'SUV', 320, 'rented', 'Automatic'],
   ]
 
+  const carMileage = [48200, 61500, 22100, 35800, 88400, 95200, 54300, 18700, 42600, 39100, 67800, 25400]
+
   const cars = carDefs.map(([make, model, year, registration, color, category, daily_rate, status], i) => ({
     id: uid('car_'),
     company_id: companyId,
@@ -92,6 +96,7 @@ export async function buildSeed() {
     category,
     daily_rate,
     status,
+    mileage: carMileage[i] || 0,
     photo_url: '',
     notes: i === 5 ? 'Front windscreen replacement pending.' : '',
     created_at: addDays(now, -200 + i).toISOString(),
@@ -170,6 +175,9 @@ export async function buildSeed() {
     const days = daysBetween(pickup_at, expected_return_at)
     const car = cars[carIndex]
     const total_amount = car.daily_rate * days
+    const isOpen = (extra.status ?? 'completed') !== 'completed'
+    const distance = isOpen ? 0 : Math.max(30, Math.round(days * (90 + (counter % 7) * 25)))
+    const startMileage = isOpen ? car.mileage : Math.max(500, car.mileage - distance)
     return {
       id: uid('rnt_'),
       company_id: companyId,
@@ -184,6 +192,8 @@ export async function buildSeed() {
       days,
       total_amount,
       deposit_amount: extra.deposit_amount ?? Math.round(car.daily_rate * 2),
+      start_mileage: startMileage,
+      end_mileage: isOpen ? null : startMileage + distance,
       additional_charges: extra.additional_charges ?? [],
       status: extra.status ?? 'completed',
       notes: extra.notes ?? '',
@@ -332,8 +342,71 @@ export async function buildSeed() {
     },
   ]
 
+  const cashbook = [
+    {
+      id: uid('csh_'),
+      company_id: companyId,
+      car_id: cars[5].id,
+      direction: 'expense',
+      expense_scope: 'fleet',
+      category: 'Repairs',
+      description: 'Front windscreen replacement — Hiace FCH-7789.',
+      amount: 320,
+      method: 'bank_transfer',
+      reference: 'INV-4471',
+      occurred_at: addDays(now, -4).toISOString(),
+      recorded_by: ownerId,
+      created_at: addDays(now, -4).toISOString(),
+    },
+    {
+      id: uid('csh_'),
+      company_id: companyId,
+      car_id: null,
+      direction: 'expense',
+      expense_scope: 'company',
+      category: 'Office & rent',
+      description: 'Workshop rent — monthly instalment.',
+      amount: 450,
+      method: 'bank_transfer',
+      reference: 'RENT-09',
+      occurred_at: addDays(now, -8).toISOString(),
+      recorded_by: ownerId,
+      created_at: addDays(now, -8).toISOString(),
+    },
+    {
+      id: uid('csh_'),
+      company_id: companyId,
+      car_id: cars[1].id,
+      direction: 'expense',
+      expense_scope: 'fleet',
+      category: 'Fuel',
+      description: 'Diesel top-up before Kariba trip.',
+      amount: 85,
+      method: 'cash',
+      reference: '',
+      occurred_at: addDays(now, -3).toISOString(),
+      recorded_by: staffIds[1],
+      created_at: addDays(now, -3).toISOString(),
+    },
+    {
+      id: uid('csh_'),
+      company_id: companyId,
+      car_id: null,
+      direction: 'inflow',
+      expense_scope: 'company',
+      category: 'Other income',
+      description: 'Late-return fee settled in cash.',
+      amount: 30,
+      method: 'cash',
+      reference: '',
+      occurred_at: addDays(now, -5).toISOString(),
+      recorded_by: staffIds[0],
+      created_at: addDays(now, -5).toISOString(),
+    },
+  ]
+
   return {
-    version: 1,
+    version: 2,
     seeded_at: new Date().toISOString(),
     today: toDateInput(now),
     companies: [company],
@@ -342,6 +415,7 @@ export async function buildSeed() {
     customers,
     rentals,
     payments,
+    cashbook,
     activity,
     settings: {},
   }

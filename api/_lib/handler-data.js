@@ -29,6 +29,7 @@ const VERSIONED_OPERATIONS = {
   'rentals.cancel': ['rentals', 0],
   'rentals.remove': ['rentals', 0],
   'payments.remove': ['payments', 0],
+  'cashbook.remove': ['cashbook_entries', 0],
 }
 
 function repository() {

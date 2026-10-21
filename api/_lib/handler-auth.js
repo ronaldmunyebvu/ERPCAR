@@ -77,7 +77,12 @@ const ACTIONS = {
     const password = String(payload.password || '')
     if (!email || !password) throw new ApiError('Enter your email address and password.')
 
-    const account = await repo.auth.signIn({ email, password })
+    const account = await repo.auth.signIn({
+      email,
+      password,
+      role: payload.role === 'member' ? 'member' : undefined,
+      company: payload.company ? String(payload.company) : undefined,
+    })
     const { token, maxAge } = issueSession({
       userId: account.user.id,
       companyId: account.company.id,
@@ -92,6 +97,54 @@ const ACTIONS = {
   async signOut() {
     // The handler replaces this with an expired cookie.
     return {}
+  },
+
+  /**
+   * First step of first-time member setup: emails a six digit code. Same
+   * token policy as a password reset — in production the code is withheld and
+   * the response is identical whether or not the account exists.
+   */
+  async requestMemberSetup(repo, _session, payload) {
+    const email = String(payload.email || '').trim()
+    const company = String(payload.company || '').trim()
+    if (!email || !company) throw new ApiError('Enter your email address and company name.')
+
+    const result = await repo.auth.requestMemberVerification({ email, company })
+    const { strip } = await runGuard('resetTokenPolicy')
+    const safe = { ...result }
+    for (const field of strip) safe[field] = null
+    return safe
+  },
+
+  /**
+   * Second step: the code proves the inbox, the member chooses a password,
+   * and the session is issued in the same breath — finishing exactly like a
+   * password sign-in.
+   */
+  async completeMemberSetup(repo, _session, payload, event) {
+    const email = String(payload.email || '').trim()
+    const company = String(payload.company || '').trim()
+    const token = String(payload.token || '').trim()
+    const password = String(payload.password || '')
+    if (!email || !company || !token) {
+      throw new ApiError('Email, company and verification code are all required.')
+    }
+
+    const account = await repo.auth.completeMemberVerification({
+      email,
+      company,
+      token,
+      password,
+    })
+    const { token: jwt, maxAge } = issueSession({
+      userId: account.user.id,
+      companyId: account.company.id,
+      role: account.user.role,
+    })
+    return {
+      account: publicAccount(account.user, account.company),
+      cookie: sessionCookie(event, jwt, maxAge),
+    }
   },
 
   /**

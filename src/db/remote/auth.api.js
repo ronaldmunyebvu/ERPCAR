@@ -48,8 +48,22 @@ export async function restore() {
   return result?.account ?? null
 }
 
-export async function signIn(email, password) {
-  const result = await call('signIn', { email, password })
+export async function signIn(email, password, { role, company } = {}) {
+  const result = await call('signIn', { email, password, role, company })
+  return result?.account ?? null
+}
+
+/** First-time member setup: requests the emailed six digit code. */
+export async function requestMemberSetup(email, company) {
+  return call('requestMemberSetup', { email, company })
+}
+
+/**
+ * Completes first-time member setup: verifies the code, stores the chosen
+ * password and issues the session cookie in the same response.
+ */
+export async function completeMemberSetup({ email, company, token, password }) {
+  const result = await call('completeMemberSetup', { email, company, token, password })
   return result?.account ?? null
 }
 

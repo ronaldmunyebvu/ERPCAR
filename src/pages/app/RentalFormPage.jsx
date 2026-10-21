@@ -31,6 +31,7 @@ import { CarStatusBadge } from '@/components/domain/Badges'
 import { CustomerFormModal } from '@/components/domain/CustomerForm'
 import {
   formatMoney,
+  formatNumber,
   toDateTimeInput,
   daysBetween,
   currencySymbol,
@@ -53,6 +54,7 @@ function defaultForm() {
     expected_return_at: toDateTimeInput(expected),
     daily_rate: '',
     deposit_amount: '',
+    start_mileage: '',
     additional_charges: [],
     payment_method: 'cash',
     notes: '',
@@ -105,6 +107,7 @@ export default function RentalFormPage() {
       expected_return_at: toDateTimeInput(rental.expected_return_at),
       daily_rate: String(rental.daily_rate),
       deposit_amount: String(rental.deposit_amount ?? ''),
+      start_mileage: rental.start_mileage != null ? String(rental.start_mileage) : '',
       additional_charges: (rental.additional_charges || []).map((charge) => ({ ...charge })),
       payment_method: rental.payments?.[0]?.method || 'cash',
       notes: rental.notes || '',
@@ -168,6 +171,12 @@ export default function RentalFormPage() {
       }
     }
     if (rate < 0) found.daily_rate = 'Daily rate cannot be negative.'
+    const needsMileage = !isEdit || status === 'active'
+    if (needsMileage) {
+      if (form.start_mileage === '' || Number(form.start_mileage) < 0) {
+        found.start_mileage = 'Enter the vehicle mileage at pickup.'
+      }
+    }
     setErrors(found)
     return Object.keys(found).length === 0
   }
@@ -184,6 +193,7 @@ export default function RentalFormPage() {
       expected_return_at: new Date(form.expected_return_at).toISOString(),
       daily_rate: rate,
       deposit_amount: Number(form.deposit_amount) || 0,
+      start_mileage: form.start_mileage === '' ? undefined : Number(form.start_mileage),
       additional_charges: form.additional_charges
         .filter((charge) => charge.label?.trim())
         .map((charge) => ({ label: charge.label.trim(), amount: Number(charge.amount) || 0 })),
@@ -301,7 +311,8 @@ export default function RentalFormPage() {
                     </p>
                     <p className="text-xs text-ink-500">
                       {selectedCar.registration} · {selectedCar.color || 'Colour n/a'} ·{' '}
-                      {titleCase(selectedCar.category)} · {selectedCar.year}
+                      {titleCase(selectedCar.category)} · {selectedCar.year} ·{' '}
+                      {formatNumber(selectedCar.mileage || 0)} km on the odometer
                     </p>
                   </div>
                   <CarStatusBadge status={selectedCar.status} size="sm" />
@@ -316,6 +327,29 @@ export default function RentalFormPage() {
                     ? 'Pick a vehicle to see its details and daily rate.'
                     : 'No vehicles are currently available. Mark a vehicle as available in the fleet first.'}
                 </Alert>
+              )}
+
+              {selectedCar && (!isEdit || status === 'active') && (
+                <Field
+                  label="Odometer at pickup (km)"
+                  required
+                  error={errors.start_mileage}
+                  hint={
+                    selectedCar.mileage != null
+                      ? `The vehicle currently shows ${formatNumber(selectedCar.mileage || 0)} km.`
+                      : 'Recorded at handover; used to calculate the distance covered.'
+                  }
+                >
+                  <Input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={form.start_mileage}
+                    onChange={set('start_mileage')}
+                    placeholder="e.g. 45210"
+                    invalid={Boolean(errors.start_mileage)}
+                  />
+                </Field>
               )}
             </div>
           </Card>

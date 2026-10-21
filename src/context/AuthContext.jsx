@@ -7,6 +7,7 @@ import {
   saveOfflineAccount,
 } from '@/db/offline/local'
 import { signToken, verifyToken } from '@/lib/crypto'
+import { effectiveDuties, hasDuty } from '@/lib/duties'
 
 /**
  * Auth state.
@@ -113,7 +114,10 @@ export function AuthProvider({ children }) {
   const signIn = useCallback(
     async (credentials) => {
       const account = isLiveMode()
-        ? await authApi.signIn(credentials.email, credentials.password)
+        ? await authApi.signIn(credentials.email, credentials.password, {
+            role: credentials.role,
+            company: credentials.company,
+          })
         : await getRepository().then(async (repo) => {
             const found = await repo.auth.signIn(credentials)
             const token = await signToken(
@@ -122,6 +126,44 @@ export function AuthProvider({ children }) {
             )
             sessionStorage.setItem(SESSION_KEY, token)
             localStorage.setItem(SESSION_KEY, token)
+            return found
+          })
+      return adopt(account)
+    },
+    [adopt],
+  )
+
+  /**
+   * First half of first-time staff setup: asks the server to email a code.
+   * Identical response whether or not the account exists.
+   */
+  const requestMemberSetup = useCallback(async (email, company) => {
+    if (isLiveMode()) return authApi.requestMemberSetup(email, company)
+    const repo = await getRepository()
+    return repo.auth.requestMemberVerification({ email, company })
+  }, [])
+
+  /**
+   * Finishes first-time staff setup: verifies the emailed code, stores the
+   * chosen password and ends signed in, exactly like a password sign-in.
+   */
+  const completeMemberSetup = useCallback(
+    async ({ email, company, token, password }) => {
+      const account = isLiveMode()
+        ? await authApi.completeMemberSetup({ email, company, token, password })
+        : await getRepository().then(async (repo) => {
+            const found = await repo.auth.completeMemberVerification({
+              email,
+              company,
+              token,
+              password,
+            })
+            const session = await signToken(
+              { userId: found.user.id, companyId: found.company.id, role: found.user.role },
+              MOCK_SECRET,
+            )
+            sessionStorage.setItem(SESSION_KEY, session)
+            localStorage.setItem(SESSION_KEY, session)
             return found
           })
       return adopt(account)
@@ -183,13 +225,17 @@ export function AuthProvider({ children }) {
       isAuthenticated: Boolean(user),
       isAdmin: user?.role === 'admin',
       isMember: user?.role === 'member',
+      duties: effectiveDuties(user),
+      can: (duty) => hasDuty(user, duty),
       signIn,
+      requestMemberSetup,
+      completeMemberSetup,
       confirmEmail,
       signOut,
       refresh,
       clearError: () => setError(null),
     }),
-    [user, company, ready, error, signIn, confirmEmail, signOut, refresh],
+    [user, company, ready, error, signIn, requestMemberSetup, completeMemberSetup, confirmEmail, signOut, refresh],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

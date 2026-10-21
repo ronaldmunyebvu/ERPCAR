@@ -1,15 +1,16 @@
 import { lazy, Suspense } from 'react'
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { AppShell } from '@/components/layout/AppShell'
-import { RequireAuth, RedirectIfAuthenticated, NotFound } from '@/components/layout/Guards'
+import { RequireAuth, RequireDuty, RedirectIfAuthenticated, NotFound } from '@/components/layout/Guards'
 const AccountPage = lazy(() => import('@/pages/app/AccountPage'))
 const ActivityPage = lazy(() => import('@/pages/app/ActivityPage'))
+const CashbookPage = lazy(() => import('@/pages/app/CashbookPage'))
 const CompanyPage = lazy(() => import('@/pages/app/CompanyPage'))
 const CustomersPage = lazy(() => import('@/pages/app/CustomersPage'))
 const DashboardPage = lazy(() => import('@/pages/app/DashboardPage'))
 const FleetPage = lazy(() => import('@/pages/app/FleetPage'))
+const MaintenancePage = lazy(() => import('@/pages/app/MaintenancePage'))
 const MembersPage = lazy(() => import('@/pages/app/MembersPage'))
-const PaymentsPage = lazy(() => import('@/pages/app/PaymentsPage'))
 const RentalDetailPage = lazy(() => import('@/pages/app/RentalDetailPage'))
 const RentalFormPage = lazy(() => import('@/pages/app/RentalFormPage'))
 const RentalsPage = lazy(() => import('@/pages/app/RentalsPage'))
@@ -17,6 +18,7 @@ const ReportsPage = lazy(() => import('@/pages/app/ReportsPage'))
 const ConfirmEmailPage = lazy(() => import('@/pages/auth/ConfirmEmailPage'))
 const ForgotPasswordPage = lazy(() => import('@/pages/auth/ForgotPasswordPage'))
 const LoginPage = lazy(() => import('@/pages/auth/LoginPage'))
+const MemberSetupPage = lazy(() => import('@/pages/auth/MemberSetupPage'))
 const ResetPasswordPage = lazy(() => import('@/pages/auth/ResetPasswordPage'))
 const SetupPage = lazy(() => import('@/pages/auth/SetupPage'))
 
@@ -59,6 +61,15 @@ export default function App() {
       />
 
       <Route
+        path="/setup-member"
+        element={
+          <RedirectIfAuthenticated>
+            <MemberSetupPage />
+          </RedirectIfAuthenticated>
+        }
+      />
+
+      <Route
         path="/login"
         element={
           <RedirectIfAuthenticated>
@@ -94,14 +105,79 @@ export default function App() {
         }
       >
         <Route index element={<DashboardPage />} />
-        <Route path="rentals" element={<RentalsPage />} />
-        <Route path="rentals/new" element={<RentalFormPage />} />
-        <Route path="rentals/:id" element={<RentalDetailPage />} />
-        <Route path="rentals/:id/edit" element={<RentalFormPage />} />
-        <Route path="fleet" element={<FleetPage />} />
-        <Route path="customers" element={<CustomersPage />} />
-        <Route path="payments" element={<PaymentsPage />} />
-        <Route path="reports" element={<ReportsPage />} />
+        <Route
+          path="rentals"
+          element={
+            <RequireDuty duty="rentals">
+              <RentalsPage />
+            </RequireDuty>
+          }
+        />
+        <Route
+          path="rentals/new"
+          element={
+            <RequireDuty duty="rentals">
+              <RentalFormPage />
+            </RequireDuty>
+          }
+        />
+        <Route
+          path="rentals/:id"
+          element={
+            <RequireDuty duty="rentals">
+              <RentalDetailPage />
+            </RequireDuty>
+          }
+        />
+        <Route
+          path="rentals/:id/edit"
+          element={
+            <RequireDuty duty="rentals">
+              <RentalFormPage />
+            </RequireDuty>
+          }
+        />
+        <Route
+          path="fleet"
+          element={
+            <RequireDuty duty="fleet">
+              <FleetPage />
+            </RequireDuty>
+          }
+        />
+        <Route
+          path="customers"
+          element={
+            <RequireDuty duty="customers">
+              <CustomersPage />
+            </RequireDuty>
+          }
+        />
+        <Route
+          path="cashbook"
+          element={
+            <RequireDuty duty="cashbook">
+              <CashbookPage />
+            </RequireDuty>
+          }
+        />
+        <Route path="payments" element={<Navigate to="/app/cashbook" replace />} />
+        <Route
+          path="maintenance"
+          element={
+            <RequireDuty duty="maintenance">
+              <MaintenancePage />
+            </RequireDuty>
+          }
+        />
+        <Route
+          path="reports"
+          element={
+            <RequireDuty duty="reports">
+              <ReportsPage />
+            </RequireDuty>
+          }
+        />
         <Route path="activity" element={<ActivityPage />} />
         <Route path="members" element={<MembersPage />} />
         <Route path="company" element={<CompanyPage />} />

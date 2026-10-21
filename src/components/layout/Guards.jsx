@@ -27,6 +27,18 @@ export function RequireAdmin({ children }) {
   return children
 }
 
+/**
+ * Duty gate: hides a section from staff who were not assigned it. Admins are
+ * never blocked (they hold every duty), and a member whose duties are empty
+ * has full access — the same rule the repositories apply.
+ */
+export function RequireDuty({ duty, children }) {
+  const { can, ready } = useAuth()
+  if (!ready) return <FullScreenLoader />
+  if (!can(duty)) return <Navigate to="/app" replace />
+  return children
+}
+
 export function RedirectIfAuthenticated({ children }) {
   const { isAuthenticated, ready } = useAuth()
   if (!ready) return <FullScreenLoader />

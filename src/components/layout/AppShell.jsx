@@ -18,6 +18,7 @@ import {
   WifiOff,
   RefreshCw,
   AlertTriangle,
+  Wrench,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { cn, initialsOf } from '@/lib/utils'
@@ -33,20 +34,18 @@ import {
 } from '@/db/offline/local'
 import { resolveOfflineChange, syncPendingOfflineChanges } from '@/db/remote/repo.api'
 
-function navSections({ isAdmin }) {
-  const sections = [
-    {
-      label: 'Operations',
-      items: [
-        { to: '/app', label: 'Dashboard', icon: Gauge, end: true },
-        { to: '/app/rentals/new', label: 'New Rental', icon: CalendarRange },
-        { to: '/app/rentals', label: 'Rentals', icon: CalendarRange },
-        { to: '/app/fleet', label: 'Fleet', icon: Car },
-        { to: '/app/customers', label: 'Customers', icon: Users },
-        { to: '/app/payments', label: 'Payments', icon: Wallet },
-      ],
-    },
-  ]
+function navSections({ isAdmin, can }) {
+  const operations = [
+    { to: '/app', label: 'Dashboard', icon: Gauge, end: true },
+    { to: '/app/rentals/new', label: 'New Rental', icon: CalendarRange, duty: 'rentals' },
+    { to: '/app/rentals', label: 'Rentals', icon: CalendarRange, duty: 'rentals' },
+    { to: '/app/fleet', label: 'Fleet', icon: Car, duty: 'fleet' },
+    { to: '/app/customers', label: 'Customers', icon: Users, duty: 'customers' },
+    { to: '/app/cashbook', label: 'Cashbook', icon: Wallet, duty: 'cashbook' },
+    { to: '/app/maintenance', label: 'Maintenance', icon: Wrench, duty: 'maintenance' },
+  ].filter((item) => !item.duty || !can || can(item.duty))
+
+  const sections = [{ label: 'Operations', items: operations }]
 
   if (isAdmin) {
     sections.push({
@@ -64,8 +63,8 @@ function navSections({ isAdmin }) {
 }
 
 function SidebarContent({ onNavigate }) {
-  const { user, company, isAdmin, signOut } = useAuth()
-  const sections = navSections({ isAdmin })
+  const { user, company, isAdmin, can, signOut } = useAuth()
+  const sections = navSections({ isAdmin, can })
 
   return (
     <div className="flex h-full flex-col bg-ink-950 text-ink-300">
@@ -325,7 +324,7 @@ export function AppShell({ children }) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const location = useLocation()
-  const { user, company, isAdmin, signOut } = useAuth()
+  const { user, company, isAdmin, can, signOut } = useAuth()
 
   useEffect(() => {
     setMobileOpen(false)
@@ -359,7 +358,7 @@ export function AppShell({ children }) {
                   </span>
                 )}
                 <nav className="flex flex-1 flex-col gap-1">
-                  {navSections({ isAdmin })
+                  {navSections({ isAdmin, can })
                     .flatMap((section) => section.items)
                     .map((item) => (
                       <NavLink
