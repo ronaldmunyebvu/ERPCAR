@@ -200,7 +200,7 @@ export default function CashbookPage() {
         reference: '',
         occurred_at: toDateInput(new Date()),
       })
-      manual.refresh()
+      manual.reload()
     } catch (cause) {
       setError(cause.message)
     } finally {
@@ -215,7 +215,7 @@ export default function CashbookPage() {
     try {
       await repository.cashbook.remove(removing.id)
       setRemoving(null)
-      manual.refresh()
+      manual.reload()
     } catch (cause) {
       setError(cause.message)
     } finally {
