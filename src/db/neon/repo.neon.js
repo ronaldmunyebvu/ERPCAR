@@ -8,6 +8,7 @@
  * that computes it.
  */
 import { hashPassword, verifyPassword, randomToken, randomDigits } from '../../lib/crypto.js'
+import { approvalMessage, INITIAL_FEE, MONTHLY_SUBSCRIPTION_FEE } from '../../lib/platform.js'
 import { normaliseDuties } from '../../lib/duties.js'
 import {
   isOverdue,
@@ -323,9 +324,19 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
       },
 
       async createCompanyWithOwner({ company, owner }) {
+        const email = String(owner.email).trim().toLowerCase()
+        const existing = await one('SELECT id FROM users WHERE lower(email) = $1', [email])
+        if (existing) {
+          throw new Error(
+            'An account with that email address already exists. Sign in instead, or use another email address.',
+          )
+        }
+
         const created = await one(
-          `INSERT INTO companies (name, email, phone, address, city, country, logo_url, currency, timezone)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+          `INSERT INTO companies
+             (name, email, phone, address, city, country, logo_url, currency, timezone,
+              approval_status, initial_fee_amount, subscription_amount, subscription_status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,'inactive') RETURNING *`,
           [
             company.name,
             company.email || null,
@@ -336,6 +347,8 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             company.logo_url || null,
             company.currency || 'USD',
             company.timezone || 'UTC',
+            INITIAL_FEE,
+            MONTHLY_SUBSCRIPTION_FEE,
           ],
         )
         const user = await one(
@@ -344,7 +357,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           [
             created.id,
             owner.full_name,
-            String(owner.email).trim().toLowerCase(),
+            email,
             owner.phone || null,
             await hashPassword(owner.password),
           ],
@@ -414,6 +427,10 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           )
         }
         const companyRecord = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
+        if (!companyRecord) throw new Error('Your company record could not be found. Contact your admin.')
+        if (companyRecord.approval_status && companyRecord.approval_status !== 'approved') {
+          throw new Error(approvalMessage(companyRecord.approval_status))
+        }
         await rows(`UPDATE users SET last_login_at = now(), updated_at = now() WHERE id = $1`, [user.id])
         await logActivity({
           company_id: user.company_id,
@@ -457,20 +474,22 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (!user || user.status !== 'active') {
           throw new Error('This confirmation link is invalid or has expired. Please sign in instead.')
         }
+
+        const company = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
+        const awaitingApproval =
+          company?.approval_status && company.approval_status !== 'approved'
+
+        // Prove the address and spend the link either way. A company that is
+        // still pending must not receive a session, but the owner should not
+        // have to find the email again once the super admin has approved them.
         await rows(
           'UPDATE password_resets SET used_at = now() WHERE id = $1',
           [credential.id],
         )
         await rows(
-          'UPDATE users SET email_verified = true, last_login_at = now(), updated_at = now() WHERE id = $1',
+          'UPDATE users SET email_verified = true, updated_at = now() WHERE id = $1',
           [user.id],
         )
-        // Read back: the row fetched above was fetched before the update, and
-        // the caller signs in with exactly what is returned here.
-        const updated = await one(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE id = $1`, [
-          user.id,
-        ])
-        const company = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
         await logActivity({
           company_id: user.company_id,
           user_id: user.id,
@@ -479,6 +498,15 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           entity_id: user.id,
           summary: `${user.full_name} confirmed their email address`,
         })
+
+        if (awaitingApproval) throw new Error(approvalMessage(company.approval_status))
+
+        await rows('UPDATE users SET last_login_at = now() WHERE id = $1', [user.id])
+        // Read back: the row fetched above was fetched before the update, and
+        // the caller signs in with exactly what is returned here.
+        const updated = await one(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE id = $1`, [
+          user.id,
+        ])
         return { user: updated ?? user, company }
       },
 
@@ -486,6 +514,8 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         const user = await one(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE id = $1`, [id])
         if (!user) return null
         const company = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
+        if (!company) return null
+        if (company.approval_status && company.approval_status !== 'approved') return null
         return { user, company }
       },
 
@@ -799,12 +829,15 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         const fail = () =>
           new Error('This verification code is invalid or has expired. Please request a new one.')
         if (!user || !company) throw fail()
-        const ownCompany = await one('SELECT name FROM companies WHERE id = $1', [user.company_id])
+        const ownCompany = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
         if (
           !ownCompany ||
           String(ownCompany.name).trim().toLowerCase() !== String(company).trim().toLowerCase()
         ) {
           throw fail()
+        }
+        if (ownCompany.approval_status && ownCompany.approval_status !== 'approved') {
+          throw new Error(approvalMessage(ownCompany.approval_status))
         }
 
         const credential = await one(

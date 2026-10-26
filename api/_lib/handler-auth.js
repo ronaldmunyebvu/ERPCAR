@@ -41,7 +41,7 @@ function repository() {
  * replaced with a generic message, so an unexpected error can never leak a
  * query, a hostname or a column name to the browser.
  */
-const USER_FAULT = /not found|incorrect|deactivated|password|email|account|already|json|admin|taken|invalid|expired/i
+const USER_FAULT = /not found|incorrect|deactivated|password|email|account|already|json|admin|taken|invalid|expired|approv|suspend|subscription|super admin|awaiting|fee/i
 
 function safeMessage(error) {
   if (error instanceof ApiError) return error.message
@@ -175,15 +175,16 @@ const ACTIONS = {
   },
 
   /**
-   * First-run provisioning. Refused once a company exists.
+   * Public company registration.
    *
    * Deliberately issues no session: the account it creates is unconfirmed, and
    * only the emailed link (or a reset code sent to the same inbox) can lift
-   * that. The confirmation details are returned for the same reason they are
-   * on the data path — a deployment with no mail server must still be usable.
+   * that. The company itself is created with `approval_status = 'pending'` and
+   * cannot sign in until a super admin approves it. The confirmation details
+   * are returned for the same reason they are on the data path — a deployment
+   * with no mail server must still be usable.
    */
   async setup(repo, _session, payload) {
-    await runGuard('noCompaniesExist')
     const { company, owner } = payload
     if (!company?.name || !owner?.full_name || !owner?.email || !owner?.password) {
       throw new ApiError('Company name, your name, email and password are all required.')

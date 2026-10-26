@@ -1,7 +1,12 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Building2, Car, Info, MailCheck, UserPlus } from 'lucide-react'
+import { Building2, Car, CheckCircle2, Info, MailCheck, Phone, UserPlus } from 'lucide-react'
 import { getRepository } from '@/db'
+import {
+  INITIAL_FEE_TEXT,
+  MONTHLY_FEE_TEXT,
+  SUPPORT_PHONE_LINKS,
+} from '@/lib/platform'
 import { Button, Field, Input, Textarea, Select, Alert, Card } from '@/components/ui'
 
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'ZAR', 'KES', 'NGN', 'GHS', 'ZMW', 'TZS', 'UGX', 'BWP', 'MWK']
@@ -73,9 +78,10 @@ export default function SetupPage() {
             <span className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-brand-600 text-white">
               <Car size={24} />
             </span>
-            <h1 className="mt-4 text-2xl font-semibold text-white">Set up your company</h1>
+            <h1 className="mt-4 text-2xl font-semibold text-white">Register your company</h1>
             <p className="mt-1 text-sm text-ink-400">
-              This runs once. It creates your company and its owner (admin) account.
+              Create your company and owner account. Activation needs a {INITIAL_FEE_TEXT} once-off
+              fee and super admin approval.
             </p>
           </div>
           <Button variant="secondary" onClick={() => navigate('/login')} className="bg-white/5 text-white hover:bg-white/10 hover:text-white">
@@ -88,7 +94,7 @@ export default function SetupPage() {
             {[
               ['Company', Building2],
               ['Owner account', UserPlus],
-              ['Confirmation', MailCheck],
+              ['Payment & approval', CheckCircle2],
             ].map(([label, Icon], index) => {
               const number = index + 1
               const active = step === number
@@ -121,14 +127,68 @@ export default function SetupPage() {
 
           {step === 3 ? (
             <div className="space-y-4">
-              <span className="grid h-11 w-11 place-items-center rounded-xl bg-brand-50 text-brand-600">
-                <MailCheck size={21} />
+              <span className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-50 text-emerald-600">
+                <CheckCircle2 size={21} />
               </span>
               <div>
-                <h2 className="text-lg font-semibold text-ink-900">Confirm your email to finish</h2>
+                <h2 className="text-lg font-semibold text-ink-900">
+                  Company submitted for approval
+                </h2>
                 <p className="mt-1 text-sm text-ink-500">
-                  A confirmation link is on its way to <strong>{owner.email}</strong>. Open it and
-                  you are signed in. The link works once and expires after 24 hours.
+                  <strong>{company.name}</strong> has been created. To activate it, pay the initial
+                  fee and contact the super admin for approval.
+                </p>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-brand-200 bg-brand-50 p-4">
+                  <p className="text-xs font-semibold tracking-wide text-brand-700 uppercase">
+                    Initial fee
+                  </p>
+                  <p className="mt-1 text-2xl font-semibold text-ink-900">{INITIAL_FEE_TEXT}</p>
+                  <p className="text-xs text-ink-500">Once-off payment</p>
+                </div>
+                <div className="rounded-xl border border-ink-200 bg-ink-50 p-4">
+                  <p className="text-xs font-semibold tracking-wide text-ink-500 uppercase">
+                    Monthly subscription
+                  </p>
+                  <p className="mt-1 text-2xl font-semibold text-ink-900">{MONTHLY_FEE_TEXT}</p>
+                  <p className="text-xs text-ink-500">Per month, for system maintenance</p>
+                </div>
+              </div>
+
+              <Alert tone="warning" icon={Phone} title="Pay and request approval">
+                <p>
+                  The initial fee is <strong>{INITIAL_FEE_TEXT}</strong> (a once-off payment). On a
+                  monthly basis the subscription fee is <strong>{MONTHLY_FEE_TEXT}</strong>, used
+                  for system maintenance.
+                </p>
+                <p className="mt-2">
+                  Please contact the super admin on any of these numbers for approval:
+                </p>
+                <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-semibold">
+                  {SUPPORT_PHONE_LINKS.map((phone) => (
+                    <a
+                      key={phone.tel}
+                      href={`tel:${phone.tel}`}
+                      className="underline decoration-amber-400 underline-offset-2 hover:text-amber-900"
+                    >
+                      {phone.label}
+                    </a>
+                  ))}
+                </p>
+              </Alert>
+
+              <Alert tone="info" icon={Info} title="Your account is pending">
+                Sign-in is enabled only after the super admin approves your company. Until then,
+                anyone signing in with this owner account will see the approval message.
+              </Alert>
+
+              <div>
+                <p className="text-sm font-semibold text-ink-800">Confirm your email address</p>
+                <p className="mt-1 text-sm text-ink-500">
+                  A confirmation link is on its way to <strong>{owner.email}</strong>. Open it to
+                  prove the address. The link works once and expires after 24 hours.
                 </p>
               </div>
 
@@ -150,7 +210,7 @@ export default function SetupPage() {
                   </Button>
                 </Card>
               ) : (
-                <Alert tone="info" icon={Info} title="The account stays locked until then">
+                <Alert tone="info" icon={MailCheck} title="The account stays locked until then">
                   Signing in with your password is refused until that link is opened, so nobody
                   can use this address before it has been proved.
                 </Alert>
@@ -164,8 +224,12 @@ export default function SetupPage() {
                 >
                   Verify with a one-time code instead
                 </Link>{' '}
-                — the code goes to the same inbox, activates the account and signs you in.
+                — the code goes to the same inbox and confirms the address.
               </p>
+
+              <Button variant="secondary" className="w-full" onClick={() => navigate('/login')}>
+                Back to sign in
+              </Button>
             </div>
           ) : (
           <form onSubmit={submit} className="space-y-4">
@@ -286,8 +350,9 @@ export default function SetupPage() {
                   </Field>
                 </div>
                 <Alert tone="info" icon={Info} title="What happens next">
-                  You become the owner with full access. From the admin panel you can add staff
-                  accounts — staff cannot self-register.
+                  You become the owner. After you confirm your email, pay the {INITIAL_FEE_TEXT}
+                  once-off fee and contact the super admin for approval. Once approved you can sign
+                  in and add staff accounts — staff cannot self-register.
                 </Alert>
               </>
             )}

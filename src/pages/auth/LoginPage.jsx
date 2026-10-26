@@ -110,8 +110,8 @@ export default function LoginPage() {
 
           <h2 className="text-2xl font-semibold text-ink-900">Sign in</h2>
           <p className="mt-1 text-sm text-ink-500">
-            Owners sign in with their email. Staff name their company as well — there is no public
-            sign-up.
+            Owners sign in with their email. Staff name their company as well. New companies can
+            register, then sign in once the super admin has approved them.
           </p>
 
           {error && (
@@ -213,6 +213,8 @@ export default function LoginPage() {
             <p className="text-sm font-semibold text-brand-800">Create your car rental</p>
             <p className="mt-1 text-xs leading-5 text-brand-700">
               Set up your business, add your rental name, and optionally upload a logo in seconds.
+              Activation needs a $250 once-off fee and super admin approval; the monthly
+              subscription is $7.50 for system maintenance.
             </p>
             <Button variant="secondary" className="mt-3 w-full" onClick={() => navigate('/setup')}>
               Start your rental business

@@ -125,6 +125,10 @@ export async function currentSession(token) {
   const company = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
   if (!company) return null
 
+  // Approval is re-checked on every request, so suspending a company takes
+  // effect immediately rather than at the next token expiry.
+  if (company.approval_status && company.approval_status !== 'approved') return null
+
   return {
     user,
     company,

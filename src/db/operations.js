@@ -54,10 +54,10 @@ export const OPERATIONS = {
 
   /* ------------------------------------------------------------------ auth */
   'auth.isSetupComplete': { auth: 'public' },
-  // Bootstrapping a tenant is anonymous by nature, so it is gated on the
-  // database being empty rather than on a session. Without this check the
-  // public endpoint would let anyone create a second company.
-  'auth.createCompanyWithOwner': { auth: 'public', guard: 'noCompaniesExist' },
+  // Public company registration. New companies are created `pending` and
+  // cannot be used until the super admin dashboard approves them, so the call
+  // is safe to leave open to anonymous callers.
+  'auth.createCompanyWithOwner': { auth: 'public' },
   'auth.signIn': { auth: 'public' },
   'auth.requestPasswordReset': { auth: 'public', guard: 'resetTokenPolicy' },
   'auth.completePasswordReset': { auth: 'public' },

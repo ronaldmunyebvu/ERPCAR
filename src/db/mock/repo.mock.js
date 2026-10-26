@@ -1,6 +1,7 @@
 import { loadDatabase, commit, resetDatabase, onDatabaseChange, exportDatabase } from './store'
 import { buildSeed } from './seed'
 import { hashPassword, verifyPassword, randomToken, randomDigits } from '@/lib/crypto'
+import { approvalMessage, INITIAL_FEE, MONTHLY_SUBSCRIPTION_FEE } from '@/lib/platform'
 import { normaliseDuties } from '@/lib/duties'
 import {
   uid,
@@ -184,12 +185,19 @@ export function createMockRepository() {
         return data.companies.length > 0
       },
 
-      /** First-run: register a company together with its owner account. */
+      /** Register a company together with its owner account. */
       async createCompanyWithOwner({ company, owner }) {
         const data = await db()
         const companyId = uid('cmp_')
         const ownerId = uid('usr_')
         const timestamp = new Date().toISOString()
+        const email = owner.email.trim().toLowerCase()
+
+        if (data.users.some((item) => item.email.toLowerCase() === email)) {
+          throw new Error(
+            'An account with that email address already exists. Sign in instead, or use another email address.',
+          )
+        }
 
         data.companies.push({
           id: companyId,
@@ -206,6 +214,19 @@ export function createMockRepository() {
           members_edit_own_rentals: true,
           members_manage_fleet: false,
           password_reset_enabled: true,
+          approval_status: 'pending',
+          approved_at: null,
+          approved_by: null,
+          rejected_at: null,
+          rejection_reason: null,
+          platform_notes: null,
+          initial_fee_amount: INITIAL_FEE,
+          initial_fee_paid: false,
+          initial_fee_paid_at: null,
+          subscription_amount: MONTHLY_SUBSCRIPTION_FEE,
+          subscription_status: 'inactive',
+          subscription_next_due: null,
+          last_payment_at: null,
           created_at: timestamp,
           updated_at: timestamp,
         })
@@ -288,9 +309,13 @@ export function createMockRepository() {
               'If it is gone, use "Forgot password" to verify with a code instead.',
           )
         }
+        const companyRecord = data.companies.find((item) => item.id === user.company_id)
+        if (!companyRecord) throw new Error('Your company record could not be found. Contact your admin.')
+        if (companyRecord.approval_status && companyRecord.approval_status !== 'approved') {
+          throw new Error(approvalMessage(companyRecord.approval_status))
+        }
         user.last_login_at = new Date().toISOString()
         user.updated_at = user.last_login_at
-        const companyRecord = data.companies.find((item) => item.id === user.company_id)
         logActivity(data, {
           company_id: user.company_id,
           user_id: user.id,
@@ -328,11 +353,13 @@ export function createMockRepository() {
         if (!user || user.status !== 'active') {
           throw new Error('This confirmation link is invalid or has expired. Please sign in instead.')
         }
+        const company = data.companies.find((item) => item.id === user.company_id)
+        const awaitingApproval =
+          company?.approval_status && company.approval_status !== 'approved'
+
         credential.used_at = new Date().toISOString()
         user.email_verified = true
-        user.last_login_at = credential.used_at
         user.updated_at = credential.used_at
-        const company = data.companies.find((item) => item.id === user.company_id)
         logActivity(data, {
           company_id: user.company_id,
           user_id: user.id,
@@ -341,6 +368,13 @@ export function createMockRepository() {
           entity_id: user.id,
           summary: `${user.full_name} confirmed their email address`,
         })
+
+        if (awaitingApproval) {
+          commit()
+          throw new Error(approvalMessage(company.approval_status))
+        }
+
+        user.last_login_at = credential.used_at
         commit()
         return { user: publicUser(user), company: clone(company) }
       },
@@ -350,6 +384,8 @@ export function createMockRepository() {
         const user = data.users.find((item) => item.id === id)
         if (!user) return null
         const company = data.companies.find((item) => item.id === user.company_id)
+        if (!company) return null
+        if (company.approval_status && company.approval_status !== 'approved') return null
         return { user: publicUser(user), company: clone(company) }
       },
 
@@ -654,6 +690,9 @@ export function createMockRepository() {
           String(ownCompany.name).trim().toLowerCase() !== String(company).trim().toLowerCase()
         ) {
           throw fail()
+        }
+        if (ownCompany.approval_status && ownCompany.approval_status !== 'approved') {
+          throw new Error(approvalMessage(ownCompany.approval_status))
         }
 
         const live = (data.password_resets || []).filter(

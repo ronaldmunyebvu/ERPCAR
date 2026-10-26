@@ -50,6 +50,37 @@ CREATE TABLE IF NOT EXISTS companies (
   updated_at            timestamptz NOT NULL DEFAULT now()
 );
 
+-- --------------------------------------------------- platform approval + fees
+-- Every publicly-created company starts as `pending` and cannot sign in until a
+-- super admin approves it. Existing rows (and the demo seed) default to
+-- `approved`, so adding these columns never locks an established tenant out.
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS approval_status text NOT NULL DEFAULT 'approved';
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS approved_at timestamptz;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS approved_by text;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS rejected_at timestamptz;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS rejection_reason text;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS platform_notes text;
+
+-- Commercial terms captured when the company registers. The super admin
+-- dashboard records payments against these amounts.
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS initial_fee_amount numeric(12,2) NOT NULL DEFAULT 250 CHECK (initial_fee_amount >= 0);
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS initial_fee_paid boolean NOT NULL DEFAULT false;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS initial_fee_paid_at timestamptz;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS subscription_amount numeric(12,2) NOT NULL DEFAULT 7.50 CHECK (subscription_amount >= 0);
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS subscription_status text NOT NULL DEFAULT 'inactive';
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS subscription_next_due date;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS last_payment_at timestamptz;
+
+DO $$ BEGIN
+  ALTER TABLE companies ADD CONSTRAINT companies_approval_status_check
+    CHECK (approval_status IN ('pending', 'approved', 'rejected', 'suspended'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE companies ADD CONSTRAINT companies_subscription_status_check
+    CHECK (subscription_status IN ('inactive', 'active', 'overdue', 'cancelled'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 -- ------------------------------------------------------------------- users
 CREATE TABLE IF NOT EXISTS users (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
