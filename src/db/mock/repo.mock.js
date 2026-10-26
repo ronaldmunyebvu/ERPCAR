@@ -8,6 +8,8 @@ import {
   isOverdue,
   rentalTotal,
   rentalBalance,
+  excessMileageInfo,
+  excessMileageCharge,
   matchesSearch,
   toDate,
   startOfDay,
@@ -111,6 +113,7 @@ function publicCar(car) {
     license_valid_to: null,
     license_renewed_at: null,
     mileage: 0,
+    daily_mileage_limit: 0,
     ...clone(car),
   }
 }
@@ -1020,6 +1023,7 @@ export function createMockRepository() {
           color: input.color || '',
           category: input.category || 'sedan',
           daily_rate: Number(input.daily_rate) || 0,
+          daily_mileage_limit: Number(input.daily_mileage_limit) || 0,
           status: input.status || 'available',
           mileage: Number(input.mileage) || 0,
           photo_url: input.photo_url || '',
@@ -1064,6 +1068,9 @@ export function createMockRepository() {
         applyLicenseDates(car, patch)
         if (patch.registration) car.registration = String(patch.registration).trim().toUpperCase()
         if (patch.daily_rate !== undefined) car.daily_rate = Number(patch.daily_rate) || 0
+        if (patch.daily_mileage_limit !== undefined) {
+          car.daily_mileage_limit = Number(patch.daily_mileage_limit) || 0
+        }
         const duplicate = data.cars.find(
           (item) =>
             item.id !== id &&
@@ -1330,6 +1337,10 @@ export function createMockRepository() {
         if (!Number.isFinite(startMileage) || startMileage < 0) {
           throw new Error('Enter the vehicle mileage at pickup.')
         }
+        const expectedKmPerDay = Number(input.expected_km_per_day)
+        if (!Number.isFinite(expectedKmPerDay) || expectedKmPerDay <= 0) {
+          throw new Error('Enter the expected kilometres per day for this rental.')
+        }
         const car = assertFound(data.cars.find((item) => item.id === input.car_id), 'Vehicle')
         const customer = assertFound(
           data.customers.find((item) => item.id === input.customer_id),
@@ -1379,6 +1390,7 @@ export function createMockRepository() {
           expected_return_at: input.expected_return_at,
           actual_return_at: null,
           daily_rate: dailyRate,
+          expected_km_per_day: expectedKmPerDay,
           days,
           total_amount: Number(input.total_amount ?? dailyRate * days) || 0,
           deposit_amount: Number(input.deposit_amount) || 0,
@@ -1426,6 +1438,17 @@ export function createMockRepository() {
         const rental = assertFound(data.rentals.find((item) => item.id === id), 'Rental')
         const previousCarId = rental.car_id
 
+        if (
+          patch.expected_km_per_day !== undefined &&
+          patch.expected_km_per_day !== null &&
+          patch.expected_km_per_day !== ''
+        ) {
+          const perDay = Number(patch.expected_km_per_day)
+          if (!Number.isFinite(perDay) || perDay <= 0) {
+            throw new Error('Enter the expected kilometres per day for this rental.')
+          }
+        }
+
         if (patch.pickup_at || patch.expected_return_at) {
           const pickup = patch.pickup_at ?? rental.pickup_at
           const expected = patch.expected_return_at ?? rental.expected_return_at
@@ -1433,6 +1456,12 @@ export function createMockRepository() {
         }
         Object.assign(rental, patch, { updated_at: new Date().toISOString() })
         if (patch.daily_rate !== undefined) rental.daily_rate = Number(patch.daily_rate) || 0
+        if (patch.expected_km_per_day !== undefined) {
+          rental.expected_km_per_day =
+            patch.expected_km_per_day === '' || patch.expected_km_per_day === null
+              ? null
+              : Number(patch.expected_km_per_day)
+        }
         if (patch.total_amount !== undefined) rental.total_amount = Number(patch.total_amount) || 0
         if (patch.deposit_amount !== undefined) rental.deposit_amount = Number(patch.deposit_amount) || 0
         if (patch.additional_charges !== undefined) rental.additional_charges = clone(patch.additional_charges)
@@ -1484,6 +1513,17 @@ export function createMockRepository() {
             amount: Math.round(rental.daily_rate * 0.5 * lateDays),
           })
         }
+        const mileage = excessMileageInfo(
+          { ...rental, end_mileage: endMileage },
+          days,
+        )
+        const mileageCharge = excessMileageCharge(mileage)
+        if (
+          mileageCharge &&
+          !charges.some((charge) => /(excess|mileage)/i.test(charge.label ?? ''))
+        ) {
+          charges.push(mileageCharge)
+        }
 
         rental.actual_return_at = returnedAt
         rental.days = days
@@ -1508,7 +1548,13 @@ export function createMockRepository() {
           entity: 'rental',
           entity_id: id,
           summary: `Returned ${car ? `${car.make} ${car.model} ${car.registration}` : 'vehicle'} for rental ${rental.reference}`,
-          metadata: { reference: rental.reference, days, lateDays },
+          metadata: {
+            reference: rental.reference,
+            days,
+            lateDays,
+            excessMileageKm: mileage?.excess_km ?? 0,
+            excessMileageCharge: mileageCharge?.amount ?? 0,
+          },
         })
         commit()
         return hydrateRental(data, rental)

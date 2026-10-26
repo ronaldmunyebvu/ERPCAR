@@ -155,6 +155,8 @@ CREATE TABLE IF NOT EXISTS cars (
   color          text,
   category       text        NOT NULL DEFAULT 'sedan',
   daily_rate     numeric(12,2) NOT NULL DEFAULT 0 CHECK (daily_rate >= 0),
+  -- Default kilometres included per rental day when this vehicle is booked.
+  daily_mileage_limit int    NOT NULL DEFAULT 0 CHECK (daily_mileage_limit >= 0),
   status         car_status  NOT NULL DEFAULT 'available',
   -- Odometer reading kept up to date on every completed rental return.
   mileage        int         NOT NULL DEFAULT 0 CHECK (mileage >= 0),
@@ -171,6 +173,9 @@ CREATE INDEX IF NOT EXISTS cars_company_status_idx ON cars (company_id, status);
 -- added to the existing table (CREATE TABLE IF NOT EXISTS skips it otherwise).
 ALTER TABLE cars
   ADD COLUMN IF NOT EXISTS mileage int NOT NULL DEFAULT 0 CHECK (mileage >= 0);
+
+ALTER TABLE cars
+  ADD COLUMN IF NOT EXISTS daily_mileage_limit int NOT NULL DEFAULT 0 CHECK (daily_mileage_limit >= 0);
 
 -- ------------------------------------------------- ownership + Zinara licence
 -- A vehicle is either owned outright (`owned`) or taken from a third party on
@@ -225,6 +230,9 @@ CREATE TABLE IF NOT EXISTS rentals (
   expected_return_at  timestamptz NOT NULL,
   actual_return_at    timestamptz,
   daily_rate          numeric(12,2) NOT NULL DEFAULT 0 CHECK (daily_rate >= 0),
+  -- Kilometres the customer is allowed per rental day. Excess distance is
+  -- charged at daily_rate / expected_km_per_day per kilometre on return.
+  expected_km_per_day int         CHECK (expected_km_per_day >= 0),
   days                int         NOT NULL DEFAULT 1 CHECK (days >= 0),
   total_amount        numeric(12,2) NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
   deposit_amount      numeric(12,2) NOT NULL DEFAULT 0 CHECK (deposit_amount >= 0),
@@ -248,6 +256,8 @@ CREATE INDEX IF NOT EXISTS rentals_created_by_idx      ON rentals (created_by);
 -- Odometer readings captured at pickup and return (see cars.mileage above).
 ALTER TABLE rentals ADD COLUMN IF NOT EXISTS start_mileage int;
 ALTER TABLE rentals ADD COLUMN IF NOT EXISTS end_mileage   int;
+ALTER TABLE rentals
+  ADD COLUMN IF NOT EXISTS expected_km_per_day int CHECK (expected_km_per_day >= 0);
 
 -- ---------------------------------------------------------------- payments
 CREATE TABLE IF NOT EXISTS payments (

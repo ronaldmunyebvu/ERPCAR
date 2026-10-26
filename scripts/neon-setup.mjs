@@ -254,10 +254,12 @@ async function seed(sql) {
     const extra = carExtras[defIndex] || {}
     const daysLeft = extra.license_days_left ?? 46
     const [row] = await sql`
-      INSERT INTO cars (company_id, make, model, year, registration, color, category, daily_rate, status,
+      INSERT INTO cars (company_id, make, model, year, registration, color, category, daily_rate,
+                        daily_mileage_limit, status,
                         ownership, owner_first_name, owner_last_name, company_share_percent,
                         license_valid_from, license_valid_to)
-      VALUES (${company.id}, ${make}, ${model}, ${carYear}, ${registration}, ${color}, ${category}, ${rate}, ${status},
+      VALUES (${company.id}, ${make}, ${model}, ${carYear}, ${registration}, ${color}, ${category}, ${rate},
+              ${300}, ${status},
               ${extra.ownership || 'owned'}, ${extra.owner_first_name || ''}, ${extra.owner_last_name || ''},
               ${extra.ownership ? extra.company_share_percent : 100},
               ${day(daysLeft - 90)}, ${day(daysLeft)})
@@ -319,11 +321,11 @@ async function seed(sql) {
 
     const [row] = await sql`
       INSERT INTO rentals (company_id, car_id, customer_id, created_by, reference, pickup_at,
-                           expected_return_at, actual_return_at, daily_rate, days, total_amount,
-                           deposit_amount, additional_charges, status, notes)
+                           expected_return_at, actual_return_at, daily_rate, expected_km_per_day, days,
+                           total_amount, deposit_amount, additional_charges, status, notes)
       VALUES (${company.id}, ${car.id}, ${customers[customerIndex].id}, ${staff[staffIndex].id},
               ${`RNT-${year}-${String(counter).padStart(4, '0')}`}, ${pickup}, ${expected}, ${actual},
-              ${rate}, ${days}, ${total}, ${Math.round(rate * 2)},
+              ${rate}, ${300}, ${days}, ${total}, ${Math.round(rate * 2)},
               ${JSON.stringify(charges)}::jsonb, ${status}, ${notes})
       RETURNING id, reference, total_amount`
 

@@ -43,6 +43,8 @@ import {
   formatDateTime,
   formatNumber,
   daysBetween,
+  excessMileageInfo,
+  excessMileageCharge,
   currencySymbol,
   toDateTimeInput,
   toDate,
@@ -88,6 +90,9 @@ export default function RentalDetailPage() {
     if (!data?.actual_return_at) return 0
     return Math.max(0, daysBetween(data.expected_return_at, data.actual_return_at) - 1)
   }, [data])
+
+  const mileage = useMemo(() => excessMileageInfo(data), [data])
+  const mileageCharge = excessMileageCharge(mileage)
 
   if (rental.loading) return <Spinner label="Loading rental…" />
   if (rental.error || !data) {
@@ -191,6 +196,32 @@ export default function RentalDetailPage() {
                 <Detail
                   label="Distance covered"
                   value={`${formatNumber(Math.max(0, data.end_mileage - data.start_mileage))} km`}
+                />
+              )}
+              {data.expected_km_per_day != null && (
+                <Detail
+                  label="Mileage allowance"
+                  value={`${formatNumber(data.expected_km_per_day)} km/day · ${formatNumber(
+                    Number(data.expected_km_per_day) * data.days,
+                  )} km total`}
+                />
+              )}
+              {mileage && (
+                <Detail
+                  label="Excess mileage"
+                  value={
+                    mileage.exceeded
+                      ? `${formatNumber(mileage.excess_km)} km over allowance`
+                      : 'Within allowance'
+                  }
+                  tone={mileage.exceeded ? 'danger' : undefined}
+                />
+              )}
+              {mileageCharge && (
+                <Detail
+                  label="Excess mileage charge"
+                  value={money(mileageCharge.amount)}
+                  tone="danger"
                 />
               )}
               <Detail
@@ -335,6 +366,14 @@ export default function RentalDetailPage() {
                 <MiniRow label="Colour" value={data.car?.color} />
                 <MiniRow label="Category" value={titleCase(data.car?.category)} />
                 <MiniRow label="Daily rate" value={money(data.car?.daily_rate)} />
+                <MiniRow
+                  label="Included km/day"
+                  value={
+                    data.car?.daily_mileage_limit
+                      ? `${formatNumber(data.car.daily_mileage_limit)} km`
+                      : null
+                  }
+                />
               </dl>
               <Link
                 to="/app/fleet"
@@ -437,20 +476,25 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
   }, [open, rental])
 
   const days = Math.max(1, daysBetween(rental.pickup_at, values.actual_return_at))
+  const expectedPerDay = Number(rental.expected_km_per_day) || 0
+  const allowanceKm = expectedPerDay > 0 ? expectedPerDay * days : null
   const lateDays = Math.max(0, daysBetween(rental.expected_return_at, values.actual_return_at) - 1)
   const autoLateFee =
     lateDays > 0 && !values.charges.some((charge) => /late/i.test(charge.label || ''))
       ? Math.round(rental.daily_rate * 0.5 * lateDays)
       : 0
+  const endMileage = values.end_mileage === '' ? null : Number(values.end_mileage)
+  const mileage = excessMileageInfo({ ...rental, end_mileage: endMileage }, days)
+  const mileageCharge = excessMileageCharge(mileage)
+  const hasMileageCharge = values.charges.some((charge) =>
+    /(excess|mileage)/i.test(charge.label || ''),
+  )
+  const autoMileageCharge = hasMileageCharge ? null : mileageCharge
   const extras = values.charges.reduce((sum, charge) => sum + (Number(charge.amount) || 0), 0)
-  const newTotal = rental.daily_rate * days + extras + autoLateFee
+  const newTotal = rental.daily_rate * days + extras + autoLateFee + (autoMileageCharge?.amount || 0)
   const alreadyPaid = rental.computed_paid
   const balance = Math.max(0, newTotal - alreadyPaid)
-  const endMileage = values.end_mileage === '' ? null : Number(values.end_mileage)
-  const distanceCovered =
-    endMileage != null && rental.start_mileage != null
-      ? endMileage - Number(rental.start_mileage)
-      : null
+  const distanceCovered = mileage?.distance_km ?? null
 
   const submit = async (event) => {
     event.preventDefault()
@@ -478,6 +522,7 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
           ...(autoLateFee > 0
             ? [{ label: `Late return fee (${lateDays} day${lateDays > 1 ? 's' : ''})`, amount: autoLateFee }]
             : []),
+          ...(autoMileageCharge ? [autoMileageCharge] : []),
         ],
       })
       onClose()
@@ -523,6 +568,12 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
             hint={
               rental.start_mileage != null
                 ? `Pickup reading: ${formatNumber(rental.start_mileage)} km${
+                    allowanceKm != null
+                      ? ` · Allowance: ${formatNumber(allowanceKm)} km (${formatNumber(
+                          expectedPerDay,
+                        )} km/day × ${days} day${days === 1 ? '' : 's'})`
+                      : ''
+                  }${
                     distanceCovered != null && distanceCovered >= 0
                       ? ` · Distance: ${formatNumber(distanceCovered)} km`
                       : ''
@@ -540,6 +591,24 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
             />
           </Field>
         </div>
+
+        {mileage?.exceeded && (
+          <Alert tone={autoMileageCharge ? 'warning' : 'info'} icon={AlertTriangle}>
+            The customer covered <strong>{formatNumber(mileage.distance_km)} km</strong> against an
+            allowance of <strong>{formatNumber(mileage.allowance_km)} km</strong> (
+            {formatNumber(expectedPerDay)} km/day × {days} day{days === 1 ? '' : 's'}).{' '}
+            <strong>{formatNumber(mileage.excess_km)} km</strong> over the limit.
+            {autoMileageCharge ? (
+              <>
+                {' '}An excess mileage charge of{' '}
+                <strong>{formatMoney(autoMileageCharge.amount, currency)}</strong> will be added
+                automatically.
+              </>
+            ) : (
+              ' An excess mileage charge is already listed below.'
+            )}
+          </Alert>
+        )}
 
         {lateDays > 0 && (
           <Alert tone="warning" icon={AlertTriangle}>
@@ -626,6 +695,29 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
         </Field>
 
         <dl className="space-y-2 rounded-lg bg-ink-50 p-4 text-sm">
+          {mileage && (
+            <>
+              <Row label="Distance covered" value={`${formatNumber(mileage.distance_km)} km`} />
+              <Row
+                label={`Mileage allowance (${formatNumber(expectedPerDay)} km/day × ${days} days)`}
+                value={`${formatNumber(mileage.allowance_km)} km`}
+              />
+              {mileage.exceeded && (
+                <Row
+                  label="Excess mileage"
+                  value={`${formatNumber(mileage.excess_km)} km`}
+                  tone="danger"
+                />
+              )}
+            </>
+          )}
+          {autoMileageCharge && (
+            <Row
+              label="Excess mileage charge"
+              value={formatMoney(autoMileageCharge.amount, currency)}
+              tone="danger"
+            />
+          )}
           <Row label={`Rental fee (${days} days)`} value={formatMoney(rental.daily_rate * days, currency)} />
           {extras > 0 && <Row label="Charges listed" value={formatMoney(extras, currency)} />}
           {autoLateFee > 0 && <Row label="Late return fee" value={formatMoney(autoLateFee, currency)} />}

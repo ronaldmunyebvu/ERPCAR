@@ -58,6 +58,7 @@ const EMPTY_CAR = {
   color: '',
   category: 'sedan',
   daily_rate: '',
+  daily_mileage_limit: '',
   status: 'available',
   photo_url: '',
   notes: '',
@@ -110,6 +111,7 @@ export default function FleetPage() {
         ownership: values.ownership || 'owned',
         year: Number(values.year),
         daily_rate: Number(values.daily_rate) || 0,
+        daily_mileage_limit: Number(values.daily_mileage_limit) || 0,
       }
       if (editing?.id) {
         await repository.cars.update(editing.id, payload, user)
@@ -530,6 +532,19 @@ function CarFormModal({ open, car, currency, busy, onClose, onSubmit }) {
             onChange={set('daily_rate')}
             placeholder="65.00"
             invalid={Boolean(errors.daily_rate)}
+          />
+        </Field>
+        <Field
+          label="Included km per day"
+          hint="Default mileage allowance used when booking this vehicle. Set 0 to enter it per rental."
+        >
+          <Input
+            type="number"
+            min="0"
+            step="1"
+            value={values.daily_mileage_limit ?? ''}
+            onChange={set('daily_mileage_limit')}
+            placeholder="e.g. 700"
           />
         </Field>
         <Field label="Status" hint="Only available vehicles can be booked.">

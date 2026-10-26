@@ -34,6 +34,8 @@ import {
   toDateInput,
   downloadCsv,
   currencySymbol,
+  excessMileageInfo,
+  excessMileageCharge,
   RENTAL_STATUSES,
 } from '@/lib/utils'
 
@@ -106,6 +108,15 @@ export default function RentalsPage() {
       { label: 'Actual return', value: (row) => row.actual_return_at || '' },
       { label: 'Days', value: (row) => row.days },
       { label: 'Daily rate', value: (row) => row.daily_rate },
+      { label: 'Expected km/day', value: (row) => row.expected_km_per_day ?? '' },
+      { label: 'Start mileage', value: (row) => row.start_mileage ?? '' },
+      { label: 'End mileage', value: (row) => row.end_mileage ?? '' },
+      { label: 'Distance covered', value: (row) => excessMileageInfo(row)?.distance_km ?? '' },
+      { label: 'Excess mileage', value: (row) => excessMileageInfo(row)?.excess_km ?? '' },
+      {
+        label: 'Excess mileage charge',
+        value: (row) => excessMileageCharge(excessMileageInfo(row))?.amount ?? '',
+      },
       { label: 'Total', value: (row) => row.computed_total },
       { label: 'Paid', value: (row) => row.computed_paid },
       { label: 'Balance', value: (row) => row.computed_balance },

@@ -14,6 +14,8 @@ import {
   isOverdue,
   rentalTotal,
   rentalBalance,
+  excessMileageInfo,
+  excessMileageCharge,
   startOfDay,
   addDays,
   daysBetween,
@@ -250,6 +252,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
     return {
       ...car,
       daily_rate: num(car.daily_rate),
+      daily_mileage_limit: num(car.daily_mileage_limit),
       ownership: car.ownership || 'owned',
       owner_first_name: car.owner_first_name || '',
       owner_last_name: car.owner_last_name || '',
@@ -1184,11 +1187,11 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         const subLease = input.ownership === 'sub_lease'
         const car = await one(
           `INSERT INTO cars (id, company_id, make, model, year, registration, color, category,
-                             daily_rate, status, photo_url, notes,
+                             daily_rate, daily_mileage_limit, status, photo_url, notes,
                              ownership, owner_first_name, owner_last_name, company_share_percent,
                              license_valid_from, license_valid_to)
-           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
-                   $13,$14,$15,$16,$17::date,$18::date) RETURNING *`,
+           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+                   $14,$15,$16,$17,$18::date,$19::date) RETURNING *`,
           [
             input.id || null,
             input.company_id,
@@ -1199,6 +1202,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             input.color || null,
             input.category || 'sedan',
             Number(input.daily_rate) || 0,
+            Number(input.daily_mileage_limit) || 0,
             input.status || 'available',
             input.photo_url || null,
             input.notes || null,
@@ -1274,15 +1278,16 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
              color = COALESCE($6, color),
              category = COALESCE($7, category),
              daily_rate = COALESCE($8, daily_rate),
-             status = COALESCE($9, status),
-             photo_url = COALESCE($10, photo_url),
-             notes = COALESCE($11, notes),
-             ownership = $12,
-             owner_first_name = $13,
-             owner_last_name = $14,
-             company_share_percent = $15,
-             license_valid_from = $16::date,
-             license_valid_to = $17::date,
+             daily_mileage_limit = COALESCE($9, daily_mileage_limit),
+             status = COALESCE($10, status),
+             photo_url = COALESCE($11, photo_url),
+             notes = COALESCE($12, notes),
+             ownership = $13,
+             owner_first_name = $14,
+             owner_last_name = $15,
+             company_share_percent = $16,
+             license_valid_from = $17::date,
+             license_valid_to = $18::date,
              updated_at = now()
            WHERE id = $1 RETURNING *`,
           [
@@ -1294,6 +1299,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             patch.color ?? null,
             patch.category ?? null,
             patch.daily_rate !== undefined ? Number(patch.daily_rate) : null,
+            patch.daily_mileage_limit !== undefined ? Number(patch.daily_mileage_limit) : null,
             patch.status ?? null,
             patch.photo_url ?? null,
             patch.notes ?? null,
@@ -1573,6 +1579,10 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (!Number.isFinite(startMileage) || startMileage < 0) {
           throw new Error('Enter the vehicle mileage at pickup.')
         }
+        const expectedKmPerDay = Number(input.expected_km_per_day)
+        if (!Number.isFinite(expectedKmPerDay) || expectedKmPerDay <= 0) {
+          throw new Error('Enter the expected kilometres per day for this rental.')
+        }
         const car = await one('SELECT * FROM cars WHERE id = $1', [input.car_id])
         if (!car) throw new Error('Vehicle not found')
         if (car.status === 'maintenance' || car.status === 'inactive') {
@@ -1620,9 +1630,9 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
 
         const rental = await one(
           `INSERT INTO rentals (id, company_id, car_id, customer_id, created_by, reference, pickup_at,
-                                expected_return_at, daily_rate, days, total_amount, deposit_amount,
-                                additional_charges, status, start_mileage, notes)
-           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,'active',$14,$15)
+                                expected_return_at, daily_rate, expected_km_per_day, days, total_amount,
+                                deposit_amount, additional_charges, status, start_mileage, notes)
+           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,'active',$15,$16)
            RETURNING *`,
           [
             input.id || null,
@@ -1634,6 +1644,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             input.pickup_at,
             input.expected_return_at,
             dailyRate,
+            expectedKmPerDay,
             days,
             Number(input.total_amount ?? dailyRate * days) || 0,
             Number(input.deposit_amount) || 0,
@@ -1679,6 +1690,16 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (!current) throw new Error('Rental not found')
         const pickup = patch.pickup_at ?? current.pickup_at
         const expected = patch.expected_return_at ?? current.expected_return_at
+        if (
+          patch.expected_km_per_day !== undefined &&
+          patch.expected_km_per_day !== null &&
+          patch.expected_km_per_day !== ''
+        ) {
+          const perDay = Number(patch.expected_km_per_day)
+          if (!Number.isFinite(perDay) || perDay <= 0) {
+            throw new Error('Enter the expected kilometres per day for this rental.')
+          }
+        }
 
         const updated = await one(
           `UPDATE rentals SET
@@ -1694,6 +1715,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
              status = COALESCE($11, status),
              notes = COALESCE($12, notes),
              start_mileage = COALESCE($13, start_mileage),
+             expected_km_per_day = COALESCE($14, expected_km_per_day),
              updated_at = now()
            WHERE id = $1 RETURNING *`,
           [
@@ -1711,6 +1733,11 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             patch.notes ?? null,
             patch.start_mileage !== undefined && patch.start_mileage !== null && patch.start_mileage !== ''
               ? Number(patch.start_mileage)
+              : null,
+            patch.expected_km_per_day !== undefined &&
+            patch.expected_km_per_day !== null &&
+            patch.expected_km_per_day !== ''
+              ? Number(patch.expected_km_per_day)
               : null,
           ],
         )
@@ -1764,6 +1791,17 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             amount: Math.round(num(current.daily_rate) * 0.5 * lateDays),
           })
         }
+        const mileage = excessMileageInfo(
+          { ...current, end_mileage: endMileage },
+          days,
+        )
+        const mileageCharge = excessMileageCharge(mileage)
+        if (
+          mileageCharge &&
+          !charges.some((charge) => /(excess|mileage)/i.test(charge.label ?? ''))
+        ) {
+          charges.push(mileageCharge)
+        }
 
         await rows(
           `UPDATE rentals SET actual_return_at = $2, days = $3, total_amount = $4,
@@ -1796,7 +1834,13 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           entity: 'rental',
           entity_id: id,
           summary: `Returned ${car ? `${car.make} ${car.model} ${car.registration}` : 'vehicle'} for rental ${current.reference}`,
-          metadata: { reference: current.reference, days, lateDays },
+          metadata: {
+            reference: current.reference,
+            days,
+            lateDays,
+            excessMileageKm: mileage?.excess_km ?? 0,
+            excessMileageCharge: mileageCharge?.amount ?? 0,
+          },
         })
         return this.get(id)
       },

@@ -55,6 +55,7 @@ function defaultForm() {
     daily_rate: '',
     deposit_amount: '',
     start_mileage: '',
+    expected_km_per_day: '',
     additional_charges: [],
     payment_method: 'cash',
     notes: '',
@@ -108,6 +109,8 @@ export default function RentalFormPage() {
       daily_rate: String(rental.daily_rate),
       deposit_amount: String(rental.deposit_amount ?? ''),
       start_mileage: rental.start_mileage != null ? String(rental.start_mileage) : '',
+      expected_km_per_day:
+        rental.expected_km_per_day != null ? String(rental.expected_km_per_day) : '',
       additional_charges: (rental.additional_charges || []).map((charge) => ({ ...charge })),
       payment_method: rental.payments?.[0]?.method || 'cash',
       notes: rental.notes || '',
@@ -131,8 +134,23 @@ export default function RentalFormPage() {
     }
   }, [selectedCar, form.daily_rate, isEdit])
 
+  // Use the fleet's mileage allowance as the default for this booking.
+  useEffect(() => {
+    const limit = Number(selectedCar?.daily_mileage_limit) || 0
+    if (selectedCar && limit > 0 && form.expected_km_per_day === '') {
+      setForm((current) =>
+        current.expected_km_per_day === ''
+          ? { ...current, expected_km_per_day: String(limit) }
+          : current,
+      )
+    }
+  }, [selectedCar, form.expected_km_per_day])
+
   const days = Math.max(0, daysBetween(form.pickup_at, form.expected_return_at))
   const rate = Number(form.daily_rate) || 0
+  const expectedKmPerDay = Number(form.expected_km_per_day) || 0
+  const mileageAllowance = expectedKmPerDay * days
+  const excessRatePerKm = expectedKmPerDay > 0 ? rate / expectedKmPerDay : 0
   const extrasTotal = form.additional_charges.reduce((sum, charge) => sum + (Number(charge.amount) || 0), 0)
   const rentalTotal = isEdit && existing.data ? existing.data.computed_total : rate * days + extrasTotal
   const paidSoFar = existing.data?.computed_paid || 0
@@ -171,6 +189,10 @@ export default function RentalFormPage() {
       }
     }
     if (rate < 0) found.daily_rate = 'Daily rate cannot be negative.'
+    const needsExpectedMileage = !isEdit || status === 'active' || status === 'overdue'
+    if (needsExpectedMileage && !(expectedKmPerDay > 0)) {
+      found.expected_km_per_day = 'Enter the expected kilometres per day for this rental.'
+    }
     const needsMileage = !isEdit || status === 'active'
     if (needsMileage) {
       if (form.start_mileage === '' || Number(form.start_mileage) < 0) {
@@ -194,6 +216,7 @@ export default function RentalFormPage() {
       daily_rate: rate,
       deposit_amount: Number(form.deposit_amount) || 0,
       start_mileage: form.start_mileage === '' ? undefined : Number(form.start_mileage),
+      ...(expectedKmPerDay > 0 ? { expected_km_per_day: expectedKmPerDay } : {}),
       additional_charges: form.additional_charges
         .filter((charge) => charge.label?.trim())
         .map((charge) => ({ label: charge.label.trim(), amount: Number(charge.amount) || 0 })),
@@ -348,6 +371,27 @@ export default function RentalFormPage() {
                     onChange={set('start_mileage')}
                     placeholder="e.g. 45210"
                     invalid={Boolean(errors.start_mileage)}
+                  />
+                </Field>
+              )}
+
+              {selectedCar && (
+                <Field
+                  label="Expected kilometres per day (km)"
+                  required
+                  error={errors.expected_km_per_day}
+                  hint={`Allowance: ${formatNumber(mileageAllowance)} km over ${days} day${
+                    days === 1 ? '' : 's'
+                  }. Extra km are charged at ${formatMoney(excessRatePerKm, currency)}/km, based on the daily rate.`}
+                >
+                  <Input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={form.expected_km_per_day}
+                    onChange={set('expected_km_per_day')}
+                    placeholder="e.g. 700"
+                    invalid={Boolean(errors.expected_km_per_day)}
                   />
                 </Field>
               )}
@@ -593,6 +637,16 @@ export default function RentalFormPage() {
                     <dt className="text-ink-500">Additional charges</dt>
                     <dd className="font-medium text-ink-800 tabular-nums">
                       {formatMoney(extrasTotal, currency)}
+                    </dd>
+                  </div>
+                )}
+                {expectedKmPerDay > 0 && (
+                  <div className="flex justify-between">
+                    <dt className="text-ink-500">
+                      Mileage allowance ({formatNumber(expectedKmPerDay)} km/day)
+                    </dt>
+                    <dd className="font-medium text-ink-800 tabular-nums">
+                      {formatNumber(mileageAllowance)} km
                     </dd>
                   </div>
                 )}

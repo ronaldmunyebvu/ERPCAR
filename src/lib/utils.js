@@ -211,6 +211,55 @@ export function rentalDays(rental) {
   return Math.max(1, daysBetween(rental.pickup_at, end))
 }
 
+/**
+ * Compares the distance driven with the rental's daily mileage allowance.
+ *
+ * The allowance is `expected_km_per_day × days`. Anything beyond it is billed
+ * at `daily_rate / expected_km_per_day` per kilometre, i.e. a full day's
+ * allowance over the limit costs exactly one extra day's rate.
+ *
+ * Returns `null` when the rental has no per-day limit or the odometer readings
+ * are incomplete, so callers can skip the calculation for legacy rentals.
+ */
+export function excessMileageInfo(rental, days = null) {
+  const expectedPerDay = Number(rental?.expected_km_per_day) || 0
+  if (!(expectedPerDay > 0)) return null
+
+  const start = rental?.start_mileage == null ? NaN : Number(rental.start_mileage)
+  const end = rental?.end_mileage == null ? NaN : Number(rental.end_mileage)
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null
+
+  const rentalDays = Math.max(1, Number(days ?? rental?.days) || 1)
+  const distanceKm = Math.max(0, end - start)
+  const allowanceKm = expectedPerDay * rentalDays
+  const excessKm = Math.max(0, distanceKm - allowanceKm)
+  const dailyRate = Number(rental?.daily_rate) || 0
+  const ratePerKm = dailyRate / expectedPerDay
+  const charge = Math.round(excessKm * ratePerKm * 100) / 100
+
+  return {
+    expected_per_day: expectedPerDay,
+    days: rentalDays,
+    distance_km: distanceKm,
+    allowance_km: allowanceKm,
+    excess_km: excessKm,
+    rate_per_km: ratePerKm,
+    charge,
+    exceeded: excessKm > 0,
+  }
+}
+
+/** The additional-charge entry for excess mileage, or `null` when within allowance. */
+export function excessMileageCharge(info) {
+  if (!info?.exceeded || !(info.charge > 0)) return null
+  return {
+    label: `Excess mileage (${formatNumber(info.excess_km)} km over ${formatNumber(
+      info.allowance_km,
+    )} km allowance)`,
+    amount: info.charge,
+  }
+}
+
 /** Total bill = rental fee + extras + late/damage fees, minus nothing (payments tracked separately). */
 export function rentalTotal(rental) {
   const charges = (rental.additional_charges || []).reduce(
