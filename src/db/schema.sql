@@ -141,7 +141,7 @@ BEGIN
   ALTER TABLE password_resets DROP CONSTRAINT IF EXISTS password_resets_purpose_check;
   ALTER TABLE password_resets
     ADD CONSTRAINT password_resets_purpose_check
-    CHECK (purpose IN ('password_reset', 'email_confirm', 'member_setup'));
+    CHECK (purpose IN ('password_reset', 'email_confirm', 'member_setup', 'company_setup'));
 END $$;
 
 -- -------------------------------------------------------------------- cars

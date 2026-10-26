@@ -7,7 +7,7 @@
  * the stored PBKDF2 hashes valid - the format has not changed, only the side
  * that computes it.
  */
-import { hashPassword, verifyPassword, randomToken, randomDigits } from '../../lib/crypto.js'
+import { hashPassword, verifyPassword, randomDigits } from '../../lib/crypto.js'
 import { approvalMessage, INITIAL_FEE, MONTHLY_SUBSCRIPTION_FEE } from '../../lib/platform.js'
 import { normaliseDuties } from '../../lib/duties.js'
 import {
@@ -323,60 +323,221 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         return num(row?.count) > 0
       },
 
-      async createCompanyWithOwner({ company, owner }) {
-        const email = String(owner.email).trim().toLowerCase()
-        const existing = await one('SELECT id FROM users WHERE lower(email) = $1', [email])
-        if (existing) {
-          throw new Error(
-            'An account with that email address already exists. Sign in instead, or use another email address.',
+      /**
+       * Starts a company registration: the owner enters their personal email
+       * and we create the (still pending) company plus a password-less owner,
+       * then email a six digit code that proves the address.
+       *
+       * The company cannot sign in until a super admin approves it, so creating
+       * it before the password is chosen is safe. Calling this again with the
+       * same address resends the code and refreshes the details, which is also
+       * how the setup screen supports "send a new code".
+       */
+      async requestCompanySetup({ company, owner }) {
+        const email = String(owner?.email || '').trim().toLowerCase()
+        if (!company?.name || !owner?.full_name || !email) {
+          throw new Error('Company name, your name and email address are all required.')
+        }
+
+        let user = await one('SELECT * FROM users WHERE lower(email) = $1', [email])
+        let record
+
+        if (user) {
+          // Only a registration that has not chosen a password yet may be
+          // resumed. Anything else is an existing account.
+          const existingCompany = await one('SELECT * FROM companies WHERE id = $1', [
+            user.company_id,
+          ])
+          if (
+            user.password_hash ||
+            user.email_verified !== false ||
+            !existingCompany ||
+            existingCompany.approval_status === 'approved'
+          ) {
+            throw new Error(
+              'An account with that email address already exists. Sign in instead, or use another email address.',
+            )
+          }
+          record = await one(
+            `UPDATE companies
+                SET name = $2, email = $3, phone = $4, address = $5, city = $6,
+                    country = $7, logo_url = $8, currency = $9, updated_at = now()
+              WHERE id = $1 RETURNING *`,
+            [
+              existingCompany.id,
+              company.name,
+              company.email || null,
+              company.phone || null,
+              company.address || null,
+              company.city || null,
+              company.country || null,
+              company.logo_url || null,
+              company.currency || 'USD',
+            ],
+          )
+          user = await one(
+            `UPDATE users SET full_name = $2, phone = $3, updated_at = now()
+              WHERE id = $1 RETURNING ${PUBLIC_USER_COLUMNS}`,
+            [user.id, owner.full_name, owner.phone || null],
+          )
+        } else {
+          record = await one(
+            `INSERT INTO companies
+               (name, email, phone, address, city, country, logo_url, currency, timezone,
+                approval_status, initial_fee_amount, subscription_amount, subscription_status)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,'inactive') RETURNING *`,
+            [
+              company.name,
+              company.email || null,
+              company.phone || null,
+              company.address || null,
+              company.city || null,
+              company.country || null,
+              company.logo_url || null,
+              company.currency || 'USD',
+              company.timezone || 'UTC',
+              INITIAL_FEE,
+              MONTHLY_SUBSCRIPTION_FEE,
+            ],
+          )
+          user = await one(
+            `INSERT INTO users (company_id, full_name, email, phone, password_hash, role, email_verified)
+             VALUES ($1,$2,$3,$4,NULL,'admin',false) RETURNING ${PUBLIC_USER_COLUMNS}`,
+            [record.id, owner.full_name, email, owner.phone || null],
           )
         }
 
-        const created = await one(
-          `INSERT INTO companies
-             (name, email, phone, address, city, country, logo_url, currency, timezone,
-              approval_status, initial_fee_amount, subscription_amount, subscription_status)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,'inactive') RETURNING *`,
-          [
-            company.name,
-            company.email || null,
-            company.phone || null,
-            company.address || null,
-            company.city || null,
-            company.country || null,
-            company.logo_url || null,
-            company.currency || 'USD',
-            company.timezone || 'UTC',
-            INITIAL_FEE,
-            MONTHLY_SUBSCRIPTION_FEE,
-          ],
+        // A fresh code retires the previous one, so an older email stops working
+        // the moment "send a new code" is used.
+        await rows(
+          `UPDATE password_resets SET used_at = now()
+            WHERE user_id = $1 AND purpose = 'company_setup' AND used_at IS NULL`,
+          [user.id],
         )
-        const user = await one(
-          `INSERT INTO users (company_id, full_name, email, phone, password_hash, role, email_verified)
-           VALUES ($1,$2,$3,$4,$5,'admin', false) RETURNING ${PUBLIC_USER_COLUMNS}`,
-          [
-            created.id,
-            owner.full_name,
-            email,
-            owner.phone || null,
-            await hashPassword(owner.password),
-          ],
-        )
-        // Proof of the address: emailed as a link that signs the new owner in.
-        const token = await storeCredential(user.id, 'email_confirm', 60 * 24, () => randomToken())
-        const delivered = await deliver('confirmation', {
+        const code = await storeCredential(user.id, 'company_setup', 10, () => randomDigits(6))
+        const delivered = await deliver('companySetupCode', {
           to: user.email,
           name: user.full_name,
-          company: created.name,
-          token,
+          company: record.name,
+          code,
         })
+
         return {
-          ...user,
+          ok: true,
           email_sent: delivered,
-          // Handed back only when the mail server did not take it, so the
-          // person setting up the company can still finish from this screen.
-          confirmation_token: delivered ? null : token,
+          // Handed back only when the mail server did not take it, so a local
+          // build with no mail server can still finish the registration.
+          token: delivered ? null : code,
+          email: user.email,
+          company: record.name,
         }
+      },
+
+      /**
+       * Confirms the six digit code without spending it, so the setup screen can
+       * move on to the password step. Wrong guesses are still counted and the
+       * code is killed after five.
+       */
+      async verifyCompanySetupCode({ email, token }) {
+        const secret = String(token ?? '')
+        const user = await one('SELECT * FROM users WHERE lower(email) = lower($1)', [
+          String(email || '').trim(),
+        ])
+        const fail = () =>
+          new Error('This verification code is invalid or has expired. Please request a new one.')
+        if (!user) throw fail()
+
+        const credential = await one(
+          `SELECT * FROM password_resets
+            WHERE user_id = $1 AND purpose = 'company_setup'
+              AND used_at IS NULL AND expires_at > now()
+            ORDER BY created_at DESC LIMIT 1`,
+          [user.id],
+        )
+        if (!credential) throw fail()
+        if (num(credential.attempts) >= 5) {
+          await rows('UPDATE password_resets SET used_at = now() WHERE id = $1', [credential.id])
+          throw new Error('Too many attempts. Please request a new code.')
+        }
+        if (credential.token_hash !== secret) {
+          const attempts = num(credential.attempts) + 1
+          await rows(
+            `UPDATE password_resets SET attempts = $2, used_at = CASE WHEN $2 >= 5 THEN now() ELSE used_at END
+              WHERE id = $1`,
+            [credential.id, attempts],
+          )
+          throw new Error(
+            attempts >= 5
+              ? 'Too many attempts. Please request a new code.'
+              : 'That code is incorrect. Please try again.',
+          )
+        }
+        return { ok: true }
+      },
+
+      /**
+       * Finishes the registration: re-checks the code, stores the chosen
+       * password and marks the address confirmed. No session is issued because
+       * the company is still pending super admin approval.
+       */
+      async completeCompanySetup({ email, token, password }) {
+        const secret = String(token ?? '')
+        if (String(password || '').length < 8) {
+          throw new Error('Choose a password with at least 8 characters.')
+        }
+        const user = await one('SELECT * FROM users WHERE lower(email) = lower($1)', [
+          String(email || '').trim(),
+        ])
+        const fail = () =>
+          new Error('This verification code is invalid or has expired. Please request a new one.')
+        if (!user) throw fail()
+
+        const credential = await one(
+          `SELECT * FROM password_resets
+            WHERE user_id = $1 AND purpose = 'company_setup'
+              AND used_at IS NULL AND expires_at > now()
+            ORDER BY created_at DESC LIMIT 1`,
+          [user.id],
+        )
+        if (!credential) throw fail()
+        if (num(credential.attempts) >= 5) {
+          await rows('UPDATE password_resets SET used_at = now() WHERE id = $1', [credential.id])
+          throw new Error('Too many attempts. Please request a new code.')
+        }
+        if (credential.token_hash !== secret) {
+          const attempts = num(credential.attempts) + 1
+          await rows(
+            `UPDATE password_resets SET attempts = $2, used_at = CASE WHEN $2 >= 5 THEN now() ELSE used_at END
+              WHERE id = $1`,
+            [credential.id, attempts],
+          )
+          throw new Error(
+            attempts >= 5
+              ? 'Too many attempts. Please request a new code.'
+              : 'That code is incorrect. Please try again.',
+          )
+        }
+
+        const updated = await one(
+          `UPDATE users SET password_hash = $2, email_verified = true, updated_at = now()
+            WHERE id = $1 RETURNING ${PUBLIC_USER_COLUMNS}`,
+          [user.id, await hashPassword(password)],
+        )
+        await rows(
+          `UPDATE password_resets SET used_at = now()
+            WHERE user_id = $1 AND purpose = 'company_setup' AND used_at IS NULL`,
+          [user.id],
+        )
+        const company = await one('SELECT * FROM companies WHERE id = $1', [user.company_id])
+        await logActivity({
+          company_id: user.company_id,
+          user_id: user.id,
+          action: 'auth.company_registered',
+          entity: 'user',
+          entity_id: user.id,
+          summary: `${user.full_name} registered ${company?.name || 'a company'}`,
+        })
+        return { user: updated ?? user, company }
       },
 
       /**

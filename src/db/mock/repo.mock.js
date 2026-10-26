@@ -1,6 +1,6 @@
 import { loadDatabase, commit, resetDatabase, onDatabaseChange, exportDatabase } from './store'
 import { buildSeed } from './seed'
-import { hashPassword, verifyPassword, randomToken, randomDigits } from '@/lib/crypto'
+import { hashPassword, verifyPassword, randomDigits } from '@/lib/crypto'
 import { approvalMessage, INITIAL_FEE, MONTHLY_SUBSCRIPTION_FEE } from '@/lib/platform'
 import { normaliseDuties } from '@/lib/duties'
 import {
@@ -185,89 +185,246 @@ export function createMockRepository() {
         return data.companies.length > 0
       },
 
-      /** Register a company together with its owner account. */
-      async createCompanyWithOwner({ company, owner }) {
+      /**
+       * Starts a company registration: the owner enters their personal email
+       * and we create the (still pending) company plus a password-less owner,
+       * then issue a six digit code that proves the address.
+       *
+       * Calling this again with the same address resends the code and refreshes
+       * the details, which is how the setup screen supports a new code.
+       */
+      async requestCompanySetup({ company, owner }) {
         const data = await db()
-        const companyId = uid('cmp_')
-        const ownerId = uid('usr_')
+        const email = String(owner?.email || '').trim().toLowerCase()
+        if (!company?.name || !owner?.full_name || !email) {
+          throw new Error('Company name, your name and email address are all required.')
+        }
         const timestamp = new Date().toISOString()
-        const email = owner.email.trim().toLowerCase()
 
-        if (data.users.some((item) => item.email.toLowerCase() === email)) {
-          throw new Error(
-            'An account with that email address already exists. Sign in instead, or use another email address.',
-          )
+        let user = data.users.find((item) => item.email.toLowerCase() === email)
+        let record
+
+        if (user) {
+          const existingCompany = data.companies.find((item) => item.id === user.company_id)
+          // Only a registration that has not chosen a password yet may be
+          // resumed. Anything else is an existing account.
+          if (
+            user.password_hash ||
+            user.email_verified !== false ||
+            !existingCompany ||
+            existingCompany.approval_status === 'approved'
+          ) {
+            throw new Error(
+              'An account with that email address already exists. Sign in instead, or use another email address.',
+            )
+          }
+          Object.assign(existingCompany, {
+            name: company.name,
+            email: company.email || '',
+            phone: company.phone || '',
+            address: company.address || '',
+            city: company.city || '',
+            country: company.country || '',
+            logo_url: company.logo_url || '',
+            currency: company.currency || 'USD',
+            updated_at: timestamp,
+          })
+          user.full_name = owner.full_name
+          user.phone = owner.phone || ''
+          user.updated_at = timestamp
+          record = existingCompany
+        } else {
+          const companyId = uid('cmp_')
+          const ownerId = uid('usr_')
+          record = {
+            id: companyId,
+            name: company.name,
+            email: company.email || '',
+            phone: company.phone || '',
+            address: company.address || '',
+            city: company.city || '',
+            country: company.country || '',
+            logo_url: company.logo_url || '',
+            currency: company.currency || 'USD',
+            timezone: company.timezone || 'UTC',
+            members_see_all_rentals: false,
+            members_edit_own_rentals: true,
+            members_manage_fleet: false,
+            password_reset_enabled: true,
+            approval_status: 'pending',
+            approved_at: null,
+            approved_by: null,
+            rejected_at: null,
+            rejection_reason: null,
+            platform_notes: null,
+            initial_fee_amount: INITIAL_FEE,
+            initial_fee_paid: false,
+            initial_fee_paid_at: null,
+            subscription_amount: MONTHLY_SUBSCRIPTION_FEE,
+            subscription_status: 'inactive',
+            subscription_next_due: null,
+            last_payment_at: null,
+            created_at: timestamp,
+            updated_at: timestamp,
+          }
+          data.companies.push(record)
+
+          user = {
+            id: ownerId,
+            company_id: companyId,
+            full_name: owner.full_name,
+            email,
+            phone: owner.phone || '',
+            // The password is chosen only after the email code is confirmed.
+            password_hash: null,
+            role: 'admin',
+            status: 'active',
+            avatar_url: '',
+            email_verified: false,
+            last_login_at: null,
+            created_at: timestamp,
+            updated_at: timestamp,
+          }
+          data.users.push(user)
         }
 
-        data.companies.push({
-          id: companyId,
-          name: company.name,
-          email: company.email || '',
-          phone: company.phone || '',
-          address: company.address || '',
-          city: company.city || '',
-          country: company.country || '',
-          logo_url: company.logo_url || '',
-          currency: company.currency || 'USD',
-          timezone: company.timezone || 'UTC',
-          members_see_all_rentals: false,
-          members_edit_own_rentals: true,
-          members_manage_fleet: false,
-          password_reset_enabled: true,
-          approval_status: 'pending',
-          approved_at: null,
-          approved_by: null,
-          rejected_at: null,
-          rejection_reason: null,
-          platform_notes: null,
-          initial_fee_amount: INITIAL_FEE,
-          initial_fee_paid: false,
-          initial_fee_paid_at: null,
-          subscription_amount: MONTHLY_SUBSCRIPTION_FEE,
-          subscription_status: 'inactive',
-          subscription_next_due: null,
-          last_payment_at: null,
-          created_at: timestamp,
-          updated_at: timestamp,
-        })
-
-        data.users.push({
-          id: ownerId,
-          company_id: companyId,
-          full_name: owner.full_name,
-          email: owner.email.trim().toLowerCase(),
-          phone: owner.phone || '',
-          password_hash: await hashPassword(owner.password),
-          role: 'admin',
-          status: 'active',
-          avatar_url: '',
-          // Locked until the emailed confirmation link is opened.
-          email_verified: false,
-          last_login_at: null,
-          created_at: timestamp,
-          updated_at: timestamp,
-        })
-
-        const confirmToken = randomToken()
+        data.password_resets = data.password_resets || []
+        // A fresh code retires the previous one, so an older email stops working
+        // the moment "send a new code" is used.
+        for (const item of data.password_resets) {
+          if (item.user_id === user.id && item.purpose === 'company_setup' && !item.used_at) {
+            item.used_at = timestamp
+          }
+        }
+        const code = randomDigits(6)
         data.password_resets.push({
           id: uid('prs_'),
-          user_id: ownerId,
-          token: confirmToken,
-          purpose: 'email_confirm',
+          user_id: user.id,
+          token: code,
+          purpose: 'company_setup',
           attempts: 0,
-          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
           used_at: null,
           created_at: timestamp,
         })
-
         commit()
+
         return {
-          ...publicUser(data.users.find((user) => user.id === ownerId)),
-          // Demo mode has no mail server: the link is handed back so the
-          // setup screen can offer it directly.
+          ok: true,
+          // Demo mode has no mail server: the code is handed back so the setup
+          // screen can show it directly.
           email_sent: false,
-          confirmation_token: confirmToken,
+          token: code,
+          email: user.email,
+          company: record.name,
         }
+      },
+
+      /**
+       * Confirms the six digit code without spending it, so the setup screen can
+       * move on to the password step. Wrong guesses are still counted.
+       */
+      async verifyCompanySetupCode({ email, token }) {
+        const data = await db()
+        const secret = String(token ?? '')
+        const user = data.users.find(
+          (item) => item.email.toLowerCase() === String(email || '').trim().toLowerCase(),
+        )
+        const fail = () =>
+          new Error('This verification code is invalid or has expired. Please request a new one.')
+        if (!user) throw fail()
+
+        const credential = (data.password_resets || [])
+          .filter(
+            (item) =>
+              item.user_id === user.id &&
+              item.purpose === 'company_setup' &&
+              !item.used_at &&
+              toDate(item.expires_at) > new Date(),
+          )
+          .sort((a, b) => toDate(b.created_at) - toDate(a.created_at))[0]
+        if (!credential) throw fail()
+        if (credential.attempts >= 5) {
+          credential.used_at = new Date().toISOString()
+          commit()
+          throw new Error('Too many attempts. Please request a new code.')
+        }
+        if (credential.token !== secret) {
+          credential.attempts = (credential.attempts || 0) + 1
+          if (credential.attempts >= 5) credential.used_at = new Date().toISOString()
+          commit()
+          throw new Error(
+            credential.attempts >= 5
+              ? 'Too many attempts. Please request a new code.'
+              : 'That code is incorrect. Please try again.',
+          )
+        }
+        return { ok: true }
+      },
+
+      /**
+       * Finishes the registration: re-checks the code, stores the chosen
+       * password and marks the address confirmed. No session is issued because
+       * the company is still pending super admin approval.
+       */
+      async completeCompanySetup({ email, token, password }) {
+        const data = await db()
+        const secret = String(token ?? '')
+        if (String(password || '').length < 8) {
+          throw new Error('Choose a password with at least 8 characters.')
+        }
+        const user = data.users.find(
+          (item) => item.email.toLowerCase() === String(email || '').trim().toLowerCase(),
+        )
+        const fail = () =>
+          new Error('This verification code is invalid or has expired. Please request a new one.')
+        if (!user) throw fail()
+
+        const credential = (data.password_resets || [])
+          .filter(
+            (item) =>
+              item.user_id === user.id &&
+              item.purpose === 'company_setup' &&
+              !item.used_at &&
+              toDate(item.expires_at) > new Date(),
+          )
+          .sort((a, b) => toDate(b.created_at) - toDate(a.created_at))[0]
+        if (!credential) throw fail()
+        if (credential.attempts >= 5) {
+          credential.used_at = new Date().toISOString()
+          commit()
+          throw new Error('Too many attempts. Please request a new code.')
+        }
+        if (credential.token !== secret) {
+          credential.attempts = (credential.attempts || 0) + 1
+          if (credential.attempts >= 5) credential.used_at = new Date().toISOString()
+          commit()
+          throw new Error(
+            credential.attempts >= 5
+              ? 'Too many attempts. Please request a new code.'
+              : 'That code is incorrect. Please try again.',
+          )
+        }
+
+        user.password_hash = await hashPassword(password)
+        user.email_verified = true
+        user.updated_at = new Date().toISOString()
+        for (const item of data.password_resets || []) {
+          if (item.user_id === user.id && item.purpose === 'company_setup' && !item.used_at) {
+            item.used_at = user.updated_at
+          }
+        }
+        const company = data.companies.find((item) => item.id === user.company_id)
+        logActivity(data, {
+          company_id: user.company_id,
+          user_id: user.id,
+          action: 'auth.company_registered',
+          entity: 'user',
+          entity_id: user.id,
+          summary: `${user.full_name} registered ${company?.name || 'a company'}`,
+        })
+        commit()
+        return { user: publicUser(user), company: clone(company) }
       },
 
       async signIn({ email, password, role, company }) {

@@ -54,10 +54,14 @@ export const OPERATIONS = {
 
   /* ------------------------------------------------------------------ auth */
   'auth.isSetupComplete': { auth: 'public' },
-  // Public company registration. New companies are created `pending` and
-  // cannot be used until the super admin dashboard approves them, so the call
-  // is safe to leave open to anonymous callers.
-  'auth.createCompanyWithOwner': { auth: 'public' },
+  // Public company registration, in three steps: email a code, confirm it,
+  // then choose a password. New companies are created `pending` and cannot be
+  // used until the super admin dashboard approves them, so the calls are safe
+  // to leave open to anonymous callers. The code is stripped in production by
+  // the same guard that hides a password reset token.
+  'auth.requestCompanySetup': { auth: 'public', guard: 'resetTokenPolicy' },
+  'auth.verifyCompanySetupCode': { auth: 'public' },
+  'auth.completeCompanySetup': { auth: 'public' },
   'auth.signIn': { auth: 'public' },
   'auth.requestPasswordReset': { auth: 'public', guard: 'resetTokenPolicy' },
   'auth.completePasswordReset': { auth: 'public' },

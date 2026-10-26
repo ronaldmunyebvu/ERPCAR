@@ -94,7 +94,7 @@ const setup = await invoke(authHandler, {
   company: { name: 'Attacker Co' },
   owner: { full_name: 'Attacker', email: 'attacker@example.test', password: 'password123' },
 })
-check('setup is refused once a company exists', setup.statusCode >= 400, setup.json?.error)
+check('legacy password-based setup action is no longer exposed', setup.statusCode === 404, setup.json?.error)
 
 const reset = await invoke(dataHandler, {
   operation: 'auth.requestPasswordReset',
@@ -294,7 +294,9 @@ const publicOps = Object.entries(OPERATIONS).filter(([, spec]) => spec.auth === 
 const allowedPublic = new Set([
   'bootstrap',
   'auth.isSetupComplete',
-  'auth.createCompanyWithOwner',
+  'auth.requestCompanySetup',
+  'auth.verifyCompanySetupCode',
+  'auth.completeCompanySetup',
   'auth.signIn',
   'auth.requestPasswordReset',
   'auth.completePasswordReset',

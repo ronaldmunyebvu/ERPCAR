@@ -71,11 +71,6 @@ export async function signOut() {
   await call('signOut')
 }
 
-export async function setupWorkspace({ company, owner }) {
-  const result = await call('setup', { company, owner })
-  return result?.account ?? null
-}
-
 /**
  * Redeems the emailed confirmation link.
  *

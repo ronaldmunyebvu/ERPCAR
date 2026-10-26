@@ -173,32 +173,6 @@ const ACTIONS = {
       cookie: sessionCookie(event, jwt, maxAge),
     }
   },
-
-  /**
-   * Public company registration.
-   *
-   * Deliberately issues no session: the account it creates is unconfirmed, and
-   * only the emailed link (or a reset code sent to the same inbox) can lift
-   * that. The company itself is created with `approval_status = 'pending'` and
-   * cannot sign in until a super admin approves it. The confirmation details
-   * are returned for the same reason they are on the data path — a deployment
-   * with no mail server must still be usable.
-   */
-  async setup(repo, _session, payload) {
-    const { company, owner } = payload
-    if (!company?.name || !owner?.full_name || !owner?.email || !owner?.password) {
-      throw new ApiError('Company name, your name, email and password are all required.')
-    }
-    if (String(owner.password).length < 8) {
-      throw new ApiError('Choose a password with at least 8 characters.')
-    }
-    const created = await repo.auth.createCompanyWithOwner({ company, owner })
-    return {
-      account: null,
-      email_sent: created.email_sent,
-      confirmation_token: created.confirmation_token,
-    }
-  },
 }
 
 export default async function handler(event) {

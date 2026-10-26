@@ -194,10 +194,50 @@ export async function sendMemberSetupMail({ to, name, code }) {
   }
 }
 
+/**
+ * Sends the six digit code a new company owner uses to prove their email
+ * address before choosing their password and going on to payment.
+ */
+export async function sendCompanySetupMail({ to, name, company, code }) {
+  const send = transporter()
+  if (!send) return false
+  try {
+    await send.sendMail({
+      from: `"VNexus 360" <${process.env.MAIL_USER}>`,
+      to,
+      subject: `Confirm your email: ${code}`,
+      text: [
+        `Hi ${name},`,
+        '',
+        `Use this code to confirm your email address and choose a password for ${company || 'your car rental'}:`,
+        '',
+        `   ${code}`,
+        '',
+        'The code expires in 10 minutes and can only be used once. If you were not expecting this you can ignore this email.',
+      ].join('\n'),
+      html: layout({
+        preheader: `Your email confirmation code is ${code}`,
+        heading: 'Confirm your email address',
+        body: `<p style="margin:0 0 14px;">Hi ${name},</p>
+               <p style="margin:0 0 10px;">Use this code to confirm your email address and choose a password for <strong>${company || 'your car rental'}</strong>:</p>
+               <p style="margin:0;letter-spacing:6px;font-size:30px;font-weight:bold;color:#1f45eb;">${code}</p>`,
+        action: null,
+        note: 'The code expires in 10 minutes and can only be used once.',
+        footer: 'If you were not expecting this email you can safely ignore it.',
+      }),
+    })
+    return true
+  } catch (error) {
+    console.error('[mail] company setup email failed', error?.message)
+    return false
+  }
+}
+
 /** Handle passed to the Neon repository. A missing handle simply means no mail. */
 export const mail = {
   enabled: mailEnabled,
   confirmation: sendConfirmationMail,
   resetCode: sendResetCodeMail,
   memberSetupCode: sendMemberSetupMail,
+  companySetupCode: sendCompanySetupMail,
 }
