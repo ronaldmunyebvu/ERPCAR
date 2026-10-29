@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Ban,
+  Camera,
   Car,
   CheckCircle2,
   CircleDollarSign,
@@ -13,6 +14,9 @@ import {
   Pencil,
   Phone,
   Printer,
+  ScanLine,
+  ShieldAlert,
+  ShieldCheck,
   Trash2,
   User,
   Wallet,
@@ -27,6 +31,7 @@ import {
   Button,
   Card,
   CardHeader,
+  Checkbox,
   ConfirmDialog,
   Field,
   Input,
@@ -37,6 +42,11 @@ import {
   Textarea,
 } from '@/components/ui'
 import { RentalStatusBadge, PaymentMethodBadge, CarStatusBadge } from '@/components/domain/Badges'
+import { PhotoCapture } from '@/components/domain/PhotoCapture'
+import {
+  PHOTO_SLOTS,
+  compareInspectionPhotos,
+} from '@/lib/vehicleInspection'
 import {
   formatMoney,
   formatDate,
@@ -70,6 +80,7 @@ export default function RentalDetailPage() {
   const [cancelOpen, setCancelOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [viewerPhoto, setViewerPhoto] = useState(null)
 
   const rental = useResource(
     () => repository.rentals.get(id, { companyId }),
@@ -77,6 +88,20 @@ export default function RentalDetailPage() {
   )
 
   const data = rental.data
+  const photos = useResource(
+    () => repository.rentals.photos(id, { companyId }),
+    `rentalphotos|${Boolean(repository)}|${id}|${companyId}|${data?.updated_at || ''}`,
+  )
+
+  const pickupPhotos = useMemo(
+    () => (photos.data || []).filter((photo) => photo.phase === 'pickup'),
+    [photos.data],
+  )
+  const returnPhotos = useMemo(
+    () => (photos.data || []).filter((photo) => photo.phase === 'return'),
+    [photos.data],
+  )
+
   const canEdit = isAdmin || (company?.members_edit_own_rentals && data?.created_by === user?.id)
   const open = data && (data.status === 'active' || data.computed_status === 'overdue')
 
@@ -167,6 +192,21 @@ export default function RentalDetailPage() {
         </Alert>
       )}
 
+      {data.damage_report?.damage_detected && (
+        <Alert
+          tone="danger"
+          icon={ShieldAlert}
+          title="AI detected possible new damage on return"
+          className="mb-4"
+        >
+          {data.damage_report.summary}{' '}
+          <a href="#inspection" className="font-semibold underline">
+            Review the highlighted photos
+          </a>
+          .
+        </Alert>
+      )}
+
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
           <Card>
@@ -237,6 +277,75 @@ export default function RentalDetailPage() {
                 <p className="mt-1 text-sm whitespace-pre-line text-ink-700">{data.notes}</p>
               </div>
             )}
+          </Card>
+
+          <Card id="inspection">
+            <CardHeader
+              title="Inspection photos"
+              icon={Camera}
+              description="Eight fixed angles at pickup and eight at return. The return set is compared with the pickup set automatically."
+              actions={
+                <Badge tone={pickupPhotos.length === 8 ? 'success' : 'warning'} size="sm">
+                  Pickup {pickupPhotos.length}/8 · Return {returnPhotos.length}/8
+                </Badge>
+              }
+            />
+            <div className="space-y-5 p-5">
+              {photos.loading ? (
+                <Spinner label="Loading inspection photos…" />
+              ) : photos.error ? (
+                <Alert tone="danger" title="Could not load inspection photos">
+                  {photos.error.message}
+                </Alert>
+              ) : !photos.data?.length ? (
+                <p className="rounded-lg border border-dashed border-ink-300 px-3 py-4 text-center text-sm text-ink-400">
+                  No inspection photos are on file for this rental.
+                </p>
+              ) : (
+                <>
+                  <PhotoSet title="Photos at pickup" photos={pickupPhotos} onOpen={setViewerPhoto} />
+                  <PhotoSet
+                    title="Photos on return"
+                    photos={returnPhotos}
+                    report={data.damage_report}
+                    onOpen={setViewerPhoto}
+                  />
+                </>
+              )}
+            </div>
+          </Card>
+
+          <Card>
+            <CardHeader
+              title="AI damage check"
+              icon={ScanLine}
+              description="Compares each return photo with the matching pickup angle."
+              actions={
+                data.damage_report ? (
+                  <Badge tone={data.damage_report.damage_detected ? 'danger' : 'success'} size="sm">
+                    {data.damage_report.damage_detected ? 'Attention needed' : 'No new damage'}
+                  </Badge>
+                ) : null
+              }
+            />
+            <div className="p-5">
+              {data.damage_report ? (
+                <DamageReportPanel
+                  report={data.damage_report}
+                  onOpen={(slot) => {
+                    const photo = returnPhotos.find((item) => item.slot === slot)
+                    const view = data.damage_report.views?.find((item) => item.slot === slot)
+                    if (photo) setViewerPhoto({ photo, regions: view?.regions || [] })
+                  }}
+                />
+              ) : (
+                <p className="text-sm text-ink-500">
+                  {data.actual_return_at
+                    ? 'No photo comparison was recorded when this rental was closed.'
+                    : 'A comparison report is produced automatically when the car is returned.'}
+                </p>
+              )}
+            </div>
           </Card>
 
           <Card>
@@ -413,10 +522,12 @@ export default function RentalDetailPage() {
         onClose={closeReturnModal}
         rental={data}
         currency={currency}
+        pickupPhotos={pickupPhotos}
         onSubmit={async (payload) => {
           const updated = await repository.rentals.returnCar(id, payload, user)
           toast.success(`Rental ${data.reference} closed. Balance ${money(updated.computed_balance)}.`)
           rental.reload()
+          photos.reload()
         }}
       />
 
@@ -453,15 +564,42 @@ export default function RentalDetailPage() {
         confirmLabel="Delete permanently"
         message={`Rental ${data.reference} and its payment records will be removed. This cannot be undone — cancelling is usually safer.`}
       />
+
+      <Modal
+        open={Boolean(viewerPhoto)}
+        onClose={() => setViewerPhoto(null)}
+        title={
+          viewerPhoto?.photo
+            ? `${viewerPhoto.photo.label || 'Inspection photo'} · ${
+                viewerPhoto.photo.phase === 'return' ? 'Return' : 'Pickup'
+              }`
+            : 'Inspection photo'
+        }
+        size="lg"
+        footer={
+          <Button variant="secondary" onClick={() => setViewerPhoto(null)}>
+            Close
+          </Button>
+        }
+      >
+        {viewerPhoto?.photo && (
+          <PhotoWithOverlays photo={viewerPhoto.photo} regions={viewerPhoto.regions || []} />
+        )}
+      </Modal>
     </>
   )
 }
 
-function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
+function ReturnModal({ open, onClose, rental, currency, pickupPhotos = [], onSubmit }) {
   const defaultReturn = rental.actual_return_at ? toDateTimeInput(rental.actual_return_at) : toDateTimeInput(new Date())
   const [values, setValues] = useState({ actual_return_at: defaultReturn, end_mileage: '', notes: rental.notes || '', charges: rental.additional_charges || [] })
+  const [returnPhotos, setReturnPhotos] = useState([])
+  const [report, setReport] = useState(null)
+  const [analysing, setAnalysing] = useState(false)
+  const [acknowledged, setAcknowledged] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const baselineComplete = pickupPhotos.length === 8
 
   useEffect(() => {
     if (open) {
@@ -471,6 +609,9 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
         notes: rental.notes || '',
         charges: (rental.additional_charges || []).map((charge) => ({ ...charge })),
       })
+      setReturnPhotos([])
+      setReport(null)
+      setAcknowledged(false)
       setError(null)
     }
   }, [open, rental])
@@ -496,6 +637,30 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
   const balance = Math.max(0, newTotal - alreadyPaid)
   const distanceCovered = mileage?.distance_km ?? null
 
+  const runComparison = async () => {
+    setError(null)
+    if (returnPhotos.length !== 8) {
+      setError('Capture all 8 return inspection photos before running the damage check.')
+      return null
+    }
+    if (!baselineComplete) {
+      setError('There are no pickup photos on file to compare against.')
+      return null
+    }
+    setAnalysing(true)
+    try {
+      const result = await compareInspectionPhotos(rental.id, returnPhotos)
+      setReport(result)
+      setAcknowledged(false)
+      return result
+    } catch (cause) {
+      setError(cause.message)
+      return null
+    } finally {
+      setAnalysing(false)
+    }
+  }
+
   const submit = async (event) => {
     event.preventDefault()
     setError(null)
@@ -511,12 +676,35 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
       setError('The return mileage cannot be less than the pickup mileage.')
       return
     }
+    if (returnPhotos.length !== 8) {
+      setError('Capture all 8 return inspection photos before closing the rental.')
+      return
+    }
+    if (!baselineComplete) {
+      setError('A complete set of 8 pickup inspection photos is required before this rental can be closed.')
+      return
+    }
     setBusy(true)
     try {
+      let currentReport = report
+      if (!currentReport) {
+        setAnalysing(true)
+        currentReport = await compareInspectionPhotos(rental.id, returnPhotos)
+        setReport(currentReport)
+        setAnalysing(false)
+      }
+      if (currentReport?.damage_detected && !acknowledged) {
+        setError(
+          'The AI damage check found possible new damage. Review the highlighted areas and tick the acknowledgement below before closing the rental.',
+        )
+        return
+      }
       await onSubmit({
         actual_return_at: new Date(values.actual_return_at).toISOString(),
         end_mileage: endMileage,
         notes: values.notes,
+        return_photos: returnPhotos,
+        damage_report: currentReport || null,
         additional_charges: [
           ...values.charges.filter((charge) => charge.label?.trim()),
           ...(autoLateFee > 0
@@ -529,6 +717,7 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
     } catch (cause) {
       setError(cause.message)
     } finally {
+      setAnalysing(false)
       setBusy(false)
     }
   }
@@ -544,7 +733,7 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
           <Button variant="secondary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="success" onClick={submit} loading={busy}>
+          <Button variant="success" onClick={submit} loading={busy} disabled={analysing}>
             <CheckCircle2 size={15} />
             Close rental
           </Button>
@@ -616,6 +805,101 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
             <strong>{formatMoney(autoLateFee || Math.round(rental.daily_rate * 0.5 * lateDays), currency)}</strong>{' '}
             will be added automatically unless you already have a late charge listed below.
           </Alert>
+        )}
+
+        <div className="rounded-xl border border-ink-200 p-3">
+          <PhotoCapture
+            photos={returnPhotos}
+            onChange={(next) => {
+              setReturnPhotos(next)
+              setReport(null)
+              setAcknowledged(false)
+            }}
+            disabled={busy || analysing}
+            accent="return"
+            title="Return inspection photos"
+            description="Capture the same 8 angles as the pickup inspection. The AI damage check runs against these photos."
+          />
+        </div>
+
+        {!baselineComplete && (
+          <Alert tone="warning" icon={AlertTriangle}>
+            No complete pickup inspection is on file. The rental cannot be closed until all 8 pickup
+            photos are available for comparison with the return photos.
+          </Alert>
+        )}
+
+        {baselineComplete && (
+          <div className="rounded-xl border border-ink-200 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-start gap-2">
+                <ScanLine size={17} className="mt-0.5 shrink-0 text-brand-600" />
+                <div>
+                  <p className="text-sm font-semibold text-ink-800">AI damage check</p>
+                  <p className="text-xs text-ink-500">
+                    Compares each return photo with the matching pickup angle.
+                  </p>
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={runComparison}
+                loading={analysing}
+                disabled={busy || returnPhotos.length !== 8}
+              >
+                <ScanLine size={14} />
+                {report ? 'Re-run comparison' : 'Run comparison'}
+              </Button>
+            </div>
+
+            {report && (
+              <div className="mt-3 space-y-3">
+                <Alert
+                  tone={report.damage_detected ? 'danger' : 'success'}
+                  icon={report.damage_detected ? ShieldAlert : ShieldCheck}
+                  title={report.damage_detected ? 'Possible damage detected' : 'No new damage detected'}
+                >
+                  {report.summary}
+                </Alert>
+
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+                  {report.views.map((view) => (
+                    <div key={view.slot}>
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="truncate text-ink-600">{view.label}</span>
+                        <span
+                          className={
+                            view.damage_detected
+                              ? 'font-semibold text-red-600'
+                              : 'font-semibold text-emerald-600'
+                          }
+                        >
+                          {view.status === 'compared' ? `${view.score}%` : '—'}
+                        </span>
+                      </div>
+                      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-ink-100">
+                        <div
+                          className={view.damage_detected ? 'h-full bg-red-500' : 'h-full bg-emerald-500'}
+                          style={{ width: `${view.score}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {report.damage_detected && (
+                  <Checkbox
+                    checked={acknowledged}
+                    onChange={(event) => setAcknowledged(event.target.checked)}
+                    label="I have reviewed the highlighted damage"
+                    description="The rental cannot be closed until this is acknowledged. Add any repair or damage charge below if the customer is responsible."
+                  />
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         <div>
@@ -732,6 +1016,167 @@ function ReturnModal({ open, onClose, rental, currency, onSubmit }) {
         </dl>
       </form>
     </Modal>
+  )
+}
+
+function PhotoSet({ title, photos, report, onOpen }) {
+  const bySlot = new Map(photos.map((photo) => [Number(photo.slot), photo]))
+  return (
+    <section>
+      <div className="mb-2 flex items-center justify-between">
+        <p className="text-xs font-semibold tracking-wide text-ink-500 uppercase">{title}</p>
+        <span
+          className={`text-xs font-semibold ${photos.length === 8 ? 'text-emerald-600' : 'text-amber-600'}`}
+        >
+          {photos.length} of 8
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {PHOTO_SLOTS.map((slot) => {
+          const photo = bySlot.get(slot.slot)
+          const view = report?.views?.find((item) => item.slot === slot.slot)
+          if (!photo) {
+            return (
+              <div
+                key={slot.slot}
+                className="flex aspect-4/3 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-ink-300 bg-ink-50 px-2 text-center"
+              >
+                <Camera size={16} className="text-ink-300" />
+                <span className="text-[11px] font-medium text-ink-500">{slot.label}</span>
+                <span className="text-[10px] text-ink-400">Not captured</span>
+              </div>
+            )
+          }
+          return (
+            <button
+              key={slot.slot}
+              type="button"
+              onClick={() => onOpen?.({ photo, regions: view?.regions || [] })}
+              className="group text-left"
+            >
+              <div className="relative overflow-hidden rounded-lg border border-ink-200">
+                <img
+                  src={photo.data_url}
+                  alt={`${slot.label} inspection`}
+                  className="aspect-4/3 w-full object-cover transition group-hover:scale-[1.02]"
+                />
+                <span className="absolute top-1 left-1 rounded bg-ink-950/65 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                  {slot.label}
+                </span>
+                {view?.damage_detected && (
+                  <span className="absolute top-1 right-1 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                    {view.score}% damage
+                  </span>
+                )}
+                {(view?.regions || []).map((region, index) => (
+                  <span
+                    key={index}
+                    className="pointer-events-none absolute border-2 border-red-500 bg-red-500/20"
+                    style={{
+                      left: `${region.x * 100}%`,
+                      top: `${region.y * 100}%`,
+                      width: `${region.width * 100}%`,
+                      height: `${region.height * 100}%`,
+                    }}
+                  />
+                ))}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function PhotoWithOverlays({ photo, regions = [] }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-center">
+        <div className="relative inline-block overflow-hidden rounded-xl border border-ink-200">
+          <img
+            src={photo.data_url}
+            alt={photo.label || 'Inspection photo'}
+            className="max-h-[68vh] max-w-full object-contain"
+          />
+          {regions.map((region, index) => (
+            <span
+              key={index}
+              className="pointer-events-none absolute border-2 border-red-500 bg-red-500/20 shadow-[0_0_0_1px_rgba(255,255,255,0.65)]"
+              style={{
+                left: `${region.x * 100}%`,
+                top: `${region.y * 100}%`,
+                width: `${region.width * 100}%`,
+                height: `${region.height * 100}%`,
+              }}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="text-xs text-ink-500">
+        <p>
+          <span className="font-semibold text-ink-700">{photo.label}</span> · captured{' '}
+          {formatDateTime(photo.captured_at)}
+        </p>
+        {regions.length ? (
+          <p className="mt-1 font-medium text-red-600">
+            Red boxes mark the areas the AI check found different from the pickup photo.
+          </p>
+        ) : (
+          <p className="mt-1">No damage area is highlighted in this view.</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DamageReportPanel({ report, onOpen }) {
+  const views = report.views || []
+  return (
+    <div className="space-y-3">
+      <Alert
+        tone={report.damage_detected ? 'danger' : 'success'}
+        icon={report.damage_detected ? ShieldAlert : ShieldCheck}
+        title={report.damage_detected ? 'Possible damage detected' : 'No new damage detected'}
+      >
+        {report.summary}
+      </Alert>
+
+      <div className="space-y-1.5">
+        {views.map((view) => (
+          <button
+            key={view.slot}
+            type="button"
+            onClick={() => onOpen?.(view.slot)}
+            className="flex w-full items-center gap-3 rounded-lg border border-ink-100 px-3 py-2 text-left transition hover:bg-ink-50"
+          >
+            <span className="w-20 shrink-0 text-xs font-medium text-ink-600">{view.label}</span>
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-ink-100">
+              <div
+                className={view.damage_detected ? 'h-full bg-red-500' : 'h-full bg-emerald-500'}
+                style={{ width: `${view.score}%` }}
+              />
+            </div>
+            <span
+              className={`w-10 text-right text-xs font-semibold ${
+                view.damage_detected ? 'text-red-600' : 'text-emerald-600'
+              }`}
+            >
+              {view.status === 'compared' ? `${view.score}%` : '—'}
+            </span>
+            {view.damage_detected && (
+              <Badge tone="danger" size="sm">
+                Damage
+              </Badge>
+            )}
+          </button>
+        ))}
+      </div>
+
+      <p className="text-[11px] text-ink-400">
+        {report.engine} · {formatDateTime(report.analysed_at)}
+      </p>
+    </div>
   )
 }
 

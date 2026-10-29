@@ -142,6 +142,13 @@ export const OPERATIONS = {
     own: 'rentals',
     force: [{ index: 1, key: 'companyId', from: FROM.COMPANY }],
   },
+  // Handover photos are large, so they are fetched separately from the rental
+  // record and never included in the list projection.
+  'rentals.photos': {
+    auth: 'member',
+    own: 'rentals',
+    force: [{ index: 1, key: 'companyId', from: FROM.COMPANY }],
+  },
   // A rental pulls in a car, a customer and a member, none of which the client
   // is allowed to nominate, so all three are checked against the tenant first.
   'rentals.create': {

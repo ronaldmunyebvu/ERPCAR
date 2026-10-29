@@ -28,6 +28,7 @@ import { warmPool } from './_lib/db.js'
 import authHandler from './_lib/handler-auth.js'
 import dataHandler from './_lib/handler-data.js'
 import healthHandler from './_lib/handler-health.js'
+import inspectionHandler from './_lib/handler-inspection.js'
 
 // Written to stderr because Vercel surfaces it in the function log. These three
 // markers are diagnostic: they show whether the module finished loading, whether
@@ -55,6 +56,7 @@ const ROUTES = new Map([
   ['/api/auth', authHandler],
   ['/api/data', dataHandler],
   ['/api/health', healthHandler],
+  ['/api/inspection', inspectionHandler],
 ])
 
 async function dispatch(event) {

@@ -73,6 +73,66 @@ function nextReference(data, companyId) {
   return `${prefix}${String(highest + 1).padStart(4, '0')}`
 }
 
+function normalisePhotos(photos, phase) {
+  if (!Array.isArray(photos) || photos.length !== 8) {
+    throw new Error(`All 8 ${phase} inspection photos are required before continuing.`)
+  }
+  const seen = new Set()
+  return photos.map((photo) => {
+    const slot = Number(photo?.slot)
+    if (!Number.isInteger(slot) || slot < 1 || slot > 8) {
+      throw new Error(`Every ${phase} photo must use one of the 8 inspection angles.`)
+    }
+    if (seen.has(slot)) {
+      throw new Error(`Only one ${phase} photo can be captured for each angle.`)
+    }
+    seen.add(slot)
+    const dataUrl = String(photo?.data_url || '')
+    if (!/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(dataUrl)) {
+      throw new Error(`Every ${phase} photo must be a valid image.`)
+    }
+    if (dataUrl.length > 600_000) {
+      throw new Error(`One of the ${phase} photos is too large. Retake it and try again.`)
+    }
+    return {
+      slot,
+      label: String(photo.label || `Photo ${slot}`).slice(0, 80),
+      data_url: dataUrl,
+      width: Number(photo.width) || null,
+      height: Number(photo.height) || null,
+      captured_at: photo.captured_at || new Date().toISOString(),
+    }
+  })
+}
+
+function storePhotos(data, rental, phase, photos) {
+  if (!data.rental_photos) data.rental_photos = []
+  const now = new Date().toISOString()
+  data.rental_photos = data.rental_photos.filter(
+    (photo) => !(photo.rental_id === rental.id && photo.phase === phase),
+  )
+  for (const photo of photos) {
+    data.rental_photos.push({
+      id: uid('pho_'),
+      company_id: rental.company_id,
+      rental_id: rental.id,
+      phase,
+      ...photo,
+      created_at: now,
+    })
+  }
+}
+
+function rentalPhotos(data, rentalId) {
+  return (data.rental_photos || [])
+    .filter((photo) => photo.rental_id === rentalId)
+    .sort((left, right) => (left.phase === right.phase
+      ? left.slot - right.slot
+      : left.phase === 'pickup'
+        ? -1
+        : 1))
+}
+
 function hydrateRental(data, rental) {
   const car = data.cars.find((item) => item.id === rental.car_id)
   const customer = data.customers.find((item) => item.id === rental.customer_id)
@@ -80,12 +140,16 @@ function hydrateRental(data, rental) {
   const payments = data.payments
     .filter((payment) => payment.rental_id === rental.id)
     .map((payment) => ({ ...payment, received_by_user: clone(data.users.find((u) => u.id === payment.received_by)) }))
+  const photos = rentalPhotos(data, rental.id)
   return {
     ...clone(rental),
     car: car ? publicCar(car) : null,
     customer: customer ? clone(customer) : null,
     created_by_user: creator ? publicUser(creator) : null,
     payments,
+    pickup_photo_count: photos.filter((photo) => photo.phase === 'pickup').length,
+    return_photo_count: photos.filter((photo) => photo.phase === 'return').length,
+    damage_report: clone(rental.damage_report || null),
     is_overdue: isOverdue(rental),
     computed_status: isOverdue(rental) ? 'overdue' : rental.status,
     computed_total: rentalTotal(rental),
@@ -1331,6 +1395,14 @@ export function createMockRepository() {
         return hydrateRental(data, rental)
       },
 
+      async photos(id, { companyId } = {}) {
+        const data = await db()
+        const rental = data.rentals.find((item) => item.id === id)
+        if (!rental) return []
+        if (companyId && rental.company_id !== companyId) return []
+        return clone(rentalPhotos(data, id))
+      },
+
       async create(input, actor) {
         const data = await db()
         const startMileage = Number(input.start_mileage)
@@ -1341,6 +1413,7 @@ export function createMockRepository() {
         if (!Number.isFinite(expectedKmPerDay) || expectedKmPerDay <= 0) {
           throw new Error('Enter the expected kilometres per day for this rental.')
         }
+        const pickupPhotos = normalisePhotos(input.pickup_photos, 'pickup')
         const car = assertFound(data.cars.find((item) => item.id === input.car_id), 'Vehicle')
         const customer = assertFound(
           data.customers.find((item) => item.id === input.customer_id),
@@ -1403,6 +1476,7 @@ export function createMockRepository() {
           updated_at: timestamp,
         }
         data.rentals.push(rental)
+        storePhotos(data, rental, 'pickup', pickupPhotos)
         car.status = 'rented'
         car.updated_at = timestamp
 
@@ -1490,7 +1564,11 @@ export function createMockRepository() {
       },
 
       /** Marks a car as returned, recalculates the bill and frees the vehicle. */
-      async returnCar(id, { actual_return_at, additional_charges, notes, end_mileage }, actor) {
+      async returnCar(
+        id,
+        { actual_return_at, additional_charges, notes, end_mileage, return_photos, damage_report },
+        actor,
+      ) {
         const data = await db()
         const rental = assertFound(data.rentals.find((item) => item.id === id), 'Rental')
         if (rental.actual_return_at) throw new Error('This rental has already been closed.')
@@ -1502,6 +1580,7 @@ export function createMockRepository() {
         if (rental.start_mileage != null && endMileage < Number(rental.start_mileage)) {
           throw new Error('The return mileage cannot be less than the pickup mileage.')
         }
+        const returnPhotos = normalisePhotos(return_photos, 'return')
 
         const returnedAt = actual_return_at || new Date().toISOString()
         const days = Math.max(1, daysBetween(rental.pickup_at, returnedAt))
@@ -1532,7 +1611,9 @@ export function createMockRepository() {
         rental.status = 'completed'
         rental.end_mileage = endMileage
         rental.notes = notes ?? rental.notes
+        rental.damage_report = damage_report ? clone(damage_report) : null
         rental.updated_at = new Date().toISOString()
+        storePhotos(data, rental, 'return', returnPhotos)
 
         const car = data.cars.find((item) => item.id === rental.car_id)
         if (car) {
@@ -1554,6 +1635,8 @@ export function createMockRepository() {
             lateDays,
             excessMileageKm: mileage?.excess_km ?? 0,
             excessMileageCharge: mileageCharge?.amount ?? 0,
+            damageDetected: Boolean(damage_report?.damage_detected),
+            damageConfidence: damage_report?.confidence ?? 0,
           },
         })
         commit()

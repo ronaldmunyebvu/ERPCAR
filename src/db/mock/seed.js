@@ -429,6 +429,7 @@ export async function buildSeed() {
     cars,
     customers,
     rentals,
+    rental_photos: [],
     payments,
     cashbook,
     activity,

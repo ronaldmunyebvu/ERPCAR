@@ -164,6 +164,70 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
   }
 
   /**
+   * Validates the eight fixed-angle inspection photos on the server as well as
+   * in the browser, so a hand-crafted request cannot create a rental without a
+   * complete handover record.
+   */
+  function normalisePhotos(photos, phase) {
+    if (!Array.isArray(photos) || photos.length !== 8) {
+      throw new Error(`8 ${phase} inspection photos must be captured before continuing.`)
+    }
+    const seen = new Set()
+    return photos.map((photo) => {
+      const slot = Number(photo?.slot)
+      if (!Number.isInteger(slot) || slot < 1 || slot > 8) {
+        throw new Error(`Every ${phase} photo must use one of the 8 inspection angles.`)
+      }
+      if (seen.has(slot)) {
+        throw new Error(`Only one ${phase} photo can be captured for each angle.`)
+      }
+      seen.add(slot)
+      const dataUrl = String(photo?.data_url || '')
+      if (!/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(dataUrl)) {
+        throw new Error(`Every ${phase} photo must be a valid image.`)
+      }
+      if (dataUrl.length > 600_000) {
+        throw new Error(`One of the ${phase} photos is too large. Retake it and try again.`)
+      }
+      return {
+        slot,
+        label: String(photo.label || `Photo ${slot}`).slice(0, 80),
+        data_url: dataUrl,
+        width: Number(photo.width) || null,
+        height: Number(photo.height) || null,
+        captured_at: photo.captured_at || new Date().toISOString(),
+      }
+    })
+  }
+
+  async function storePhotos(rentalId, companyId, phase, photos) {
+    for (const photo of photos) {
+      await rows(
+        `INSERT INTO rental_photos
+           (company_id, rental_id, phase, slot, label, data_url, width, height, captured_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT (rental_id, phase, slot) DO UPDATE SET
+           label = EXCLUDED.label,
+           data_url = EXCLUDED.data_url,
+           width = EXCLUDED.width,
+           height = EXCLUDED.height,
+           captured_at = EXCLUDED.captured_at`,
+        [
+          companyId,
+          rentalId,
+          phase,
+          photo.slot,
+          photo.label,
+          photo.data_url,
+          photo.width,
+          photo.height,
+          photo.captured_at,
+        ],
+      )
+    }
+  }
+
+  /**
    * Hands a message to the mail server, reporting whether it actually went.
    * A transport that is missing or unhappy is never allowed to fail the write
    * that triggered it — callers fall back to showing the secret on screen.
@@ -204,6 +268,10 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
 
   function decorateRental(rental) {
     if (!rental) return null
+    const damageReport =
+      rental.damage_report && typeof rental.damage_report === 'string'
+        ? JSON.parse(rental.damage_report)
+        : rental.damage_report || null
     const shaped = {
       ...rental,
       daily_rate: num(rental.daily_rate),
@@ -212,6 +280,9 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
       additional_charges: Array.isArray(rental.additional_charges)
         ? rental.additional_charges
         : JSON.parse(rental.additional_charges || '[]'),
+      damage_report: damageReport,
+      pickup_photo_count: num(rental.pickup_photo_count),
+      return_photo_count: num(rental.return_photo_count),
       payments: rental.payments || [],
     }
     const paid = shaped.payments.reduce((sum, payment) => sum + num(payment.amount), 0)
@@ -235,7 +306,11 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
       COALESCE((
         SELECT jsonb_agg(to_jsonb(p.*) - 'company_id')
         FROM payments p WHERE p.rental_id = r.id
-      ), '[]'::jsonb) AS payments
+      ), '[]'::jsonb) AS payments,
+      (SELECT count(*)::int FROM rental_photos rp
+        WHERE rp.rental_id = r.id AND rp.phase = 'pickup') AS pickup_photo_count,
+      (SELECT count(*)::int FROM rental_photos rp
+        WHERE rp.rental_id = r.id AND rp.phase = 'return') AS return_photo_count
     FROM rentals r
     LEFT JOIN cars c      ON c.id = r.car_id
     LEFT JOIN customers cu ON cu.id = r.customer_id
@@ -1570,6 +1645,16 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         })
       },
 
+      async photos(id, { companyId } = {}) {
+        const f = filters().eq('rental_id', id).eq('company_id', companyId)
+        return rows(
+          `SELECT id, rental_id, phase, slot, label, data_url, width, height, captured_at
+           FROM rental_photos${f.where()}
+           ORDER BY CASE phase WHEN 'pickup' THEN 0 ELSE 1 END, slot`,
+          f.params,
+        )
+      },
+
       async create(input, actor) {
         if (input.id) {
           const existing = await one('SELECT id FROM rentals WHERE id = $1', [input.id])
@@ -1583,6 +1668,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (!Number.isFinite(expectedKmPerDay) || expectedKmPerDay <= 0) {
           throw new Error('Enter the expected kilometres per day for this rental.')
         }
+        const pickupPhotos = normalisePhotos(input.pickup_photos, 'pickup')
         const car = await one('SELECT * FROM cars WHERE id = $1', [input.car_id])
         if (!car) throw new Error('Vehicle not found')
         if (car.status === 'maintenance' || car.status === 'inactive') {
@@ -1654,6 +1740,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           ],
         )
         await rows(`UPDATE cars SET status = 'rented', updated_at = now() WHERE id = $1`, [car.id])
+        await storePhotos(rental.id, rental.company_id, 'pickup', pickupPhotos)
 
         if (Number(input.amount_paid) > 0) {
           await rows(
@@ -1766,7 +1853,11 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         return this.get(id)
       },
 
-      async returnCar(id, { actual_return_at, additional_charges, notes, end_mileage }, actor) {
+      async returnCar(
+        id,
+        { actual_return_at, additional_charges, notes, end_mileage, return_photos, damage_report },
+        actor,
+      ) {
         const current = await one('SELECT * FROM rentals WHERE id = $1', [id])
         if (!current) throw new Error('Rental not found')
         if (current.actual_return_at) throw new Error('This rental has already been closed.')
@@ -1778,6 +1869,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (current.start_mileage != null && endMileage < num(current.start_mileage)) {
           throw new Error('The return mileage cannot be less than the pickup mileage.')
         }
+        const returnPhotos = normalisePhotos(return_photos, 'return')
 
         const returnedAt = actual_return_at || new Date().toISOString()
         const days = Math.max(1, daysBetween(current.pickup_at, returnedAt))
@@ -1807,7 +1899,8 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           `UPDATE rentals SET actual_return_at = $2, days = $3, total_amount = $4,
                               additional_charges = $5::jsonb, status = 'completed',
                               end_mileage = $7,
-                              notes = COALESCE($6, notes), updated_at = now()
+                              notes = COALESCE($6, notes),
+                              damage_report = $8::jsonb, updated_at = now()
            WHERE id = $1`,
           [
             id,
@@ -1817,12 +1910,14 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             JSON.stringify(charges),
             notes ?? null,
             endMileage,
+            damage_report ? JSON.stringify(damage_report) : null,
           ],
         )
         await rows(
           `UPDATE cars SET status = 'available', mileage = $2, updated_at = now() WHERE id = $1`,
           [current.car_id, endMileage],
         )
+        await storePhotos(id, current.company_id, 'return', returnPhotos)
 
         const car = await one('SELECT make, model, registration FROM cars WHERE id = $1', [
           current.car_id,
@@ -1840,6 +1935,8 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             lateDays,
             excessMileageKm: mileage?.excess_km ?? 0,
             excessMileageCharge: mileageCharge?.amount ?? 0,
+            damageDetected: Boolean(damage_report?.damage_detected),
+            damageConfidence: damage_report?.confidence ?? 0,
           },
         })
         return this.get(id)

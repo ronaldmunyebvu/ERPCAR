@@ -162,7 +162,7 @@ async function seed(sql) {
 
   if (existing[0].count > 0) {
     console.log('• --force given: clearing existing data…')
-    await sql`TRUNCATE payments, rentals, customers, cars, activity_log, password_resets, users, companies RESTART IDENTITY CASCADE`
+    await sql`TRUNCATE rental_photos, payments, rentals, customers, cars, activity_log, password_resets, users, companies RESTART IDENTITY CASCADE`
   }
 
   const year = new Date().getFullYear()

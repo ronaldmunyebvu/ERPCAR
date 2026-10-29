@@ -259,6 +259,36 @@ ALTER TABLE rentals ADD COLUMN IF NOT EXISTS end_mileage   int;
 ALTER TABLE rentals
   ADD COLUMN IF NOT EXISTS expected_km_per_day int CHECK (expected_km_per_day >= 0);
 
+-- AI-assisted handover inspection result. The returned photos are compared with
+-- the pickup photos and the report is stored on the rental so the damage alert
+-- survives a reload and is visible to every member of the company.
+ALTER TABLE rentals ADD COLUMN IF NOT EXISTS damage_report jsonb;
+
+-- ------------------------------------------------------- rental inspection
+-- Exactly eight handover photos are captured when a vehicle leaves and eight
+-- when it comes back. They are stored as compressed data URLs so the same
+-- deployment works without a separate object-storage bucket, and the unique
+-- key lets a retake replace a single angle without creating duplicates.
+CREATE TABLE IF NOT EXISTS rental_photos (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id  uuid        NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  rental_id   uuid        NOT NULL REFERENCES rentals(id) ON DELETE CASCADE,
+  phase       text        NOT NULL CHECK (phase IN ('pickup', 'return')),
+  slot        int         NOT NULL CHECK (slot BETWEEN 1 AND 8),
+  label       text,
+  data_url    text        NOT NULL,
+  width       int,
+  height      int,
+  captured_at timestamptz NOT NULL DEFAULT now(),
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (rental_id, phase, slot)
+);
+
+CREATE INDEX IF NOT EXISTS rental_photos_rental_idx
+  ON rental_photos (rental_id, phase, slot);
+CREATE INDEX IF NOT EXISTS rental_photos_company_idx
+  ON rental_photos (company_id);
+
 -- ---------------------------------------------------------------- payments
 CREATE TABLE IF NOT EXISTS payments (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),

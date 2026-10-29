@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   AlertTriangle,
+  Camera,
   Car,
   CheckCircle2,
   Info,
@@ -29,6 +30,7 @@ import {
 } from '@/components/ui'
 import { CarStatusBadge } from '@/components/domain/Badges'
 import { CustomerFormModal } from '@/components/domain/CustomerForm'
+import { PhotoCapture } from '@/components/domain/PhotoCapture'
 import {
   formatMoney,
   formatNumber,
@@ -80,6 +82,7 @@ export default function RentalFormPage() {
   const [customerSearch, setCustomerSearch] = useState('')
   const [customerModalOpen, setCustomerModalOpen] = useState(false)
   const [status, setStatus] = useState('active')
+  const [pickupPhotos, setPickupPhotos] = useState([])
 
   const cars = useResource(
     () => repository.cars.list({ companyId, status: 'available' }),
@@ -96,6 +99,13 @@ export default function RentalFormPage() {
   const existing = useResource(
     () => (isEdit ? repository.rentals.get(id, { companyId }) : Promise.resolve(null)),
     `rental|${Boolean(repository)}|${id}|${companyId}`,
+  )
+  const existingPhotos = useResource(
+    () =>
+      isEdit
+        ? repository.rentals.photos(id, { companyId })
+        : Promise.resolve([]),
+    `rentalphotos|${Boolean(repository)}|${id}|${companyId}`,
   )
 
   useEffect(() => {
@@ -199,6 +209,9 @@ export default function RentalFormPage() {
         found.start_mileage = 'Enter the vehicle mileage at pickup.'
       }
     }
+    if (!isEdit && pickupPhotos.length !== 8) {
+      found.pickup_photos = 'Capture all 8 vehicle handover photos before saving the rental.'
+    }
     setErrors(found)
     return Object.keys(found).length === 0
   }
@@ -221,6 +234,7 @@ export default function RentalFormPage() {
         .filter((charge) => charge.label?.trim())
         .map((charge) => ({ label: charge.label.trim(), amount: Number(charge.amount) || 0 })),
       notes: form.notes,
+      ...(!isEdit ? { pickup_photos: pickupPhotos } : {}),
     }
 
     setBusy(true)
@@ -394,6 +408,51 @@ export default function RentalFormPage() {
                     invalid={Boolean(errors.expected_km_per_day)}
                   />
                 </Field>
+              )}
+            </div>
+          </Card>
+
+          {/* Handover photos */}
+          <Card>
+            <CardHeader
+              title="Handover photos"
+              icon={Camera}
+              description="Eight fixed-angle photos are required before the vehicle can leave. They become the baseline for the AI damage check at return."
+            />
+            <div className="p-5">
+              {!isEdit ? (
+                <>
+                  <PhotoCapture
+                    photos={pickupPhotos}
+                    onChange={(photos) => {
+                      setPickupPhotos(photos)
+                      setErrors((current) => {
+                        if (!current.pickup_photos) return current
+                        const next = { ...current }
+                        delete next.pickup_photos
+                        return next
+                      })
+                    }}
+                    disabled={busy}
+                    accent="pickup"
+                  />
+                  {errors.pickup_photos && (
+                    <p className="mt-2 text-xs font-medium text-red-600">{errors.pickup_photos}</p>
+                  )}
+                </>
+              ) : (existingPhotos.data || []).length ? (
+                <PhotoCapture
+                  photos={(existingPhotos.data || []).filter((photo) => photo.phase === 'pickup')}
+                  onChange={() => {}}
+                  disabled
+                  accent="pickup"
+                  description="Pickup photos are locked once the rental is captured."
+                />
+              ) : (
+                <Alert tone="warning" icon={AlertTriangle}>
+                  This rental was captured before photo inspections were enabled, so there is no
+                  pickup baseline to compare against.
+                </Alert>
               )}
             </div>
           </Card>
