@@ -209,9 +209,6 @@ export default function RentalFormPage() {
         found.start_mileage = 'Enter the vehicle mileage at pickup.'
       }
     }
-    if (!isEdit && pickupPhotos.length !== 8) {
-      found.pickup_photos = 'Capture all 8 vehicle handover photos before saving the rental.'
-    }
     setErrors(found)
     return Object.keys(found).length === 0
   }
@@ -417,29 +414,17 @@ export default function RentalFormPage() {
             <CardHeader
               title="Handover photos"
               icon={Camera}
-              description="Eight fixed-angle photos are required before the vehicle can leave. They become the baseline for the AI damage check at return."
+              description="Optional. Capture all eight angles to enable the AI damage check at return, or record the rental without photos."
             />
             <div className="p-5">
               {!isEdit ? (
-                <>
-                  <PhotoCapture
-                    photos={pickupPhotos}
-                    onChange={(photos) => {
-                      setPickupPhotos(photos)
-                      setErrors((current) => {
-                        if (!current.pickup_photos) return current
-                        const next = { ...current }
-                        delete next.pickup_photos
-                        return next
-                      })
-                    }}
-                    disabled={busy}
-                    accent="pickup"
-                  />
-                  {errors.pickup_photos && (
-                    <p className="mt-2 text-xs font-medium text-red-600">{errors.pickup_photos}</p>
-                  )}
-                </>
+                <PhotoCapture
+                  photos={pickupPhotos}
+                  onChange={setPickupPhotos}
+                  disabled={busy}
+                  accent="pickup"
+                  optional
+                />
               ) : (existingPhotos.data || []).length ? (
                 <PhotoCapture
                   photos={(existingPhotos.data || []).filter((photo) => photo.phase === 'pickup')}

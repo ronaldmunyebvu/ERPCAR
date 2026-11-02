@@ -73,8 +73,10 @@ function nextReference(data, companyId) {
   return `${prefix}${String(highest + 1).padStart(4, '0')}`
 }
 
-function normalisePhotos(photos, phase) {
-  if (!Array.isArray(photos) || photos.length !== 8) {
+function normalisePhotos(photos, phase, optional = false) {
+  if (optional && !Array.isArray(photos)) return []
+  if (optional && photos.length === 0) return []
+  if (!Array.isArray(photos) || (!optional && photos.length !== 8) || photos.length > 8) {
     throw new Error(`All 8 ${phase} inspection photos are required before continuing.`)
   }
   const seen = new Set()
@@ -1413,7 +1415,7 @@ export function createMockRepository() {
         if (!Number.isFinite(expectedKmPerDay) || expectedKmPerDay <= 0) {
           throw new Error('Enter the expected kilometres per day for this rental.')
         }
-        const pickupPhotos = normalisePhotos(input.pickup_photos, 'pickup')
+        const pickupPhotos = normalisePhotos(input.pickup_photos, 'pickup', true)
         const car = assertFound(data.cars.find((item) => item.id === input.car_id), 'Vehicle')
         const customer = assertFound(
           data.customers.find((item) => item.id === input.customer_id),
@@ -1580,7 +1582,12 @@ export function createMockRepository() {
         if (rental.start_mileage != null && endMileage < Number(rental.start_mileage)) {
           throw new Error('The return mileage cannot be less than the pickup mileage.')
         }
-        const returnPhotos = normalisePhotos(return_photos, 'return')
+        const pickupSlots = rentalPhotos(data, id)
+          .filter((photo) => photo.phase === 'pickup')
+          .map((photo) => Number(photo.slot))
+        const baselineComplete =
+          pickupSlots.length === 8 && new Set(pickupSlots).size === 8
+        const returnPhotos = normalisePhotos(return_photos, 'return', !baselineComplete)
 
         const returnedAt = actual_return_at || new Date().toISOString()
         const days = Math.max(1, daysBetween(rental.pickup_at, returnedAt))

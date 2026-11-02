@@ -168,8 +168,10 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
    * in the browser, so a hand-crafted request cannot create a rental without a
    * complete handover record.
    */
-  function normalisePhotos(photos, phase) {
-    if (!Array.isArray(photos) || photos.length !== 8) {
+  function normalisePhotos(photos, phase, optional = false) {
+    if (optional && !Array.isArray(photos)) return []
+    if (optional && photos.length === 0) return []
+    if (!Array.isArray(photos) || (!optional && photos.length !== 8) || photos.length > 8) {
       throw new Error(`8 ${phase} inspection photos must be captured before continuing.`)
     }
     const seen = new Set()
@@ -1668,7 +1670,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (!Number.isFinite(expectedKmPerDay) || expectedKmPerDay <= 0) {
           throw new Error('Enter the expected kilometres per day for this rental.')
         }
-        const pickupPhotos = normalisePhotos(input.pickup_photos, 'pickup')
+        const pickupPhotos = normalisePhotos(input.pickup_photos, 'pickup', true)
         const car = await one('SELECT * FROM cars WHERE id = $1', [input.car_id])
         if (!car) throw new Error('Vehicle not found')
         if (car.status === 'maintenance' || car.status === 'inactive') {
@@ -1869,7 +1871,14 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (current.start_mileage != null && endMileage < num(current.start_mileage)) {
           throw new Error('The return mileage cannot be less than the pickup mileage.')
         }
-        const returnPhotos = normalisePhotos(return_photos, 'return')
+        const pickupRows = await rows(
+          `SELECT slot FROM rental_photos WHERE rental_id = $1 AND phase = 'pickup'`,
+          [id],
+        )
+        const baselineComplete =
+          pickupRows.length === 8 &&
+          new Set(pickupRows.map((photo) => Number(photo.slot))).size === 8
+        const returnPhotos = normalisePhotos(return_photos, 'return', !baselineComplete)
 
         const returnedAt = actual_return_at || new Date().toISOString()
         const days = Math.max(1, daysBetween(current.pickup_at, returnedAt))

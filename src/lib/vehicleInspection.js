@@ -1,10 +1,10 @@
 /**
  * Vehicle handover inspection.
  *
- * Every rental carries exactly eight photos of the car at pickup and eight at
- * return, taken from the same fixed angles. At return, a server-side vision
- * model compares each matching pair and reports possible new damage for a
- * person to review before the vehicle is released.
+ * Rentals may include eight photos of the car at pickup and return, taken from
+ * the same fixed angles. When both complete sets are available, a server-side
+ * vision model compares each matching pair and reports possible new damage
+ * for a person to review before the vehicle is released.
  */
 
 export const REQUIRED_PHOTOS = 8

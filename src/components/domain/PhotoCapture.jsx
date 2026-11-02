@@ -20,6 +20,7 @@ export function PhotoCapture({
   accent = 'pickup',
   title,
   description,
+  optional = false,
   className,
 }) {
   const inputs = useRef({})
@@ -56,6 +57,7 @@ export function PhotoCapture({
   }
 
   const complete = total === REQUIRED_PHOTOS
+  const emptyOptional = optional && total === 0
 
   return (
     <div className={cn('space-y-3', className)}>
@@ -69,11 +71,15 @@ export function PhotoCapture({
             'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset',
             complete
               ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
-              : 'bg-amber-50 text-amber-700 ring-amber-200',
+              : emptyOptional
+                ? 'bg-ink-50 text-ink-500 ring-ink-200'
+                : 'bg-amber-50 text-amber-700 ring-amber-200',
           )}
         >
           {complete && <Check size={12} />}
-          {total} of {REQUIRED_PHOTOS} photos
+          {emptyOptional
+            ? 'Photos optional'
+            : `${total} of ${REQUIRED_PHOTOS} photos${optional && !complete ? ' · optional' : ''}`}
         </span>
       </div>
 

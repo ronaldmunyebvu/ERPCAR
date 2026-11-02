@@ -639,7 +639,7 @@ function ReturnModal({ open, onClose, rental, currency, pickupPhotos = [], onSub
 
   const runComparison = async () => {
     setError(null)
-    if (returnPhotos.length !== 8) {
+    if (baselineComplete && returnPhotos.length !== 8) {
       setError('Capture all 8 return inspection photos before running the damage check.')
       return null
     }
@@ -676,18 +676,14 @@ function ReturnModal({ open, onClose, rental, currency, pickupPhotos = [], onSub
       setError('The return mileage cannot be less than the pickup mileage.')
       return
     }
-    if (returnPhotos.length !== 8) {
+    if (baselineComplete && returnPhotos.length !== 8) {
       setError('Capture all 8 return inspection photos before closing the rental.')
-      return
-    }
-    if (!baselineComplete) {
-      setError('A complete set of 8 pickup inspection photos is required before this rental can be closed.')
       return
     }
     setBusy(true)
     try {
       let currentReport = report
-      if (!currentReport) {
+      if (baselineComplete && !currentReport) {
         setAnalysing(true)
         currentReport = await compareInspectionPhotos(rental.id, returnPhotos)
         setReport(currentReport)
@@ -818,14 +814,19 @@ function ReturnModal({ open, onClose, rental, currency, pickupPhotos = [], onSub
             disabled={busy || analysing}
             accent="return"
             title="Return inspection photos"
-            description="Capture the same 8 angles as the pickup inspection. The AI damage check runs against these photos."
+            description={
+              baselineComplete
+                ? 'Capture the same 8 angles as the pickup inspection. The AI damage check runs against these photos.'
+                : 'Optional documentation. The rental can be closed without photos; AI comparison is unavailable without a complete pickup set.'
+            }
+            optional={!baselineComplete}
           />
         </div>
 
         {!baselineComplete && (
           <Alert tone="warning" icon={AlertTriangle}>
-            No complete pickup inspection is on file. The rental cannot be closed until all 8 pickup
-            photos are available for comparison with the return photos.
+            No complete pickup inspection is on file. You can still close this rental, but the AI
+            damage comparison will not be available.
           </Alert>
         )}
 
