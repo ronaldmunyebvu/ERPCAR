@@ -275,13 +275,17 @@ export function createMockRepository() {
 
         if (user) {
           const existingCompany = data.companies.find((item) => item.id === user.company_id)
-          // Only a registration that has not chosen a password yet may be
-          // resumed. Anything else is an existing account.
+          // A company whose own contact email is the owner's address is allowed
+          // to re-enter setup with that same address, so the business email and
+          // the sign-in email can be one and the same. Otherwise only a
+          // registration that has not chosen a password yet may be resumed.
+          const sameAsCompanyEmail =
+            existingCompany &&
+            String(existingCompany.email || '').trim().toLowerCase() === email
           if (
-            user.password_hash ||
-            user.email_verified !== false ||
             !existingCompany ||
-            existingCompany.approval_status === 'approved'
+            existingCompany.approval_status === 'approved' ||
+            (!sameAsCompanyEmail && (user.password_hash || user.email_verified !== false))
           ) {
             throw new Error(
               'An account with that email address already exists. Sign in instead, or use another email address.',

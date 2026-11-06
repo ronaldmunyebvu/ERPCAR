@@ -36,7 +36,7 @@ export async function buildSeed() {
     initial_fee_amount: 250,
     initial_fee_paid: true,
     initial_fee_paid_at: addDays(now, -398).toISOString(),
-    subscription_amount: 7.5,
+    subscription_amount: 20,
     subscription_status: 'active',
     subscription_next_due: addDays(now, 21).toISOString().slice(0, 10),
     last_payment_at: addDays(now, -9).toISOString(),

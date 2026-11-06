@@ -423,16 +423,20 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         let record
 
         if (user) {
-          // Only a registration that has not chosen a password yet may be
-          // resumed. Anything else is an existing account.
+          // A company whose own contact email is the owner's address is allowed
+          // to re-enter setup with that same address, so the business email and
+          // the sign-in email can be one and the same. Otherwise only a
+          // registration that has not chosen a password yet may be resumed.
           const existingCompany = await one('SELECT * FROM companies WHERE id = $1', [
             user.company_id,
           ])
+          const sameAsCompanyEmail =
+            existingCompany &&
+            String(existingCompany.email || '').trim().toLowerCase() === email
           if (
-            user.password_hash ||
-            user.email_verified !== false ||
             !existingCompany ||
-            existingCompany.approval_status === 'approved'
+            existingCompany.approval_status === 'approved' ||
+            (!sameAsCompanyEmail && (user.password_hash || user.email_verified !== false))
           ) {
             throw new Error(
               'An account with that email address already exists. Sign in instead, or use another email address.',

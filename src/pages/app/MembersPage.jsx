@@ -41,12 +41,18 @@ export default function MembersPage() {
   const [busy, setBusy] = useState(false)
 
   const members = useResource(
-    () => repository.users.list({ companyId, search: debouncedSearch }),
-    `members|${companyId}|${debouncedSearch}`,
+    () =>
+      repository
+        ? repository.users.list({ companyId, search: debouncedSearch })
+        : Promise.resolve([]),
+    `members|${Boolean(repository)}|${companyId}|${debouncedSearch}`,
   )
   const activity = useResource(
-    () => repository.activity.list({ companyId, limit: 500 }),
-    `activity|${companyId}`,
+    () =>
+      repository
+        ? repository.activity.list({ companyId, limit: 500 })
+        : Promise.resolve([]),
+    `activity|${Boolean(repository)}|${companyId}`,
   )
 
   const rows = members.data || []

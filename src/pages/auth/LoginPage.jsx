@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Car, Eye, EyeOff, Info } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { getRepository } from '@/db'
+import { INITIAL_FEE_TEXT, MONTHLY_FEE_TEXT } from '@/lib/platform'
 import { Button, Field, Input, Alert, Spinner, Card, SegmentedControl } from '@/components/ui'
 
 
@@ -213,8 +214,8 @@ export default function LoginPage() {
             <p className="text-sm font-semibold text-brand-800">Create your car rental</p>
             <p className="mt-1 text-xs leading-5 text-brand-700">
               Set up your business, add your rental name, and optionally upload a logo in seconds.
-              Activation needs a $250 once-off fee and super admin approval; the monthly
-              subscription is $7.50 for system maintenance.
+              Activation needs a {INITIAL_FEE_TEXT} once-off fee and super admin approval; the monthly
+              subscription is {MONTHLY_FEE_TEXT} for system maintenance.
             </p>
             <Button variant="secondary" className="mt-3 w-full" onClick={() => navigate('/setup')}>
               Start your rental business

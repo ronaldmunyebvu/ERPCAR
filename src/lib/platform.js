@@ -8,7 +8,7 @@
  */
 
 export const INITIAL_FEE = 250
-export const MONTHLY_SUBSCRIPTION_FEE = 7.5
+export const MONTHLY_SUBSCRIPTION_FEE = 20
 export const PLATFORM_CURRENCY = 'USD'
 
 export const SUPPORT_PHONES = [

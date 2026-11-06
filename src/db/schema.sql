@@ -66,7 +66,7 @@ ALTER TABLE companies ADD COLUMN IF NOT EXISTS platform_notes text;
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS initial_fee_amount numeric(12,2) NOT NULL DEFAULT 250 CHECK (initial_fee_amount >= 0);
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS initial_fee_paid boolean NOT NULL DEFAULT false;
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS initial_fee_paid_at timestamptz;
-ALTER TABLE companies ADD COLUMN IF NOT EXISTS subscription_amount numeric(12,2) NOT NULL DEFAULT 7.50 CHECK (subscription_amount >= 0);
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS subscription_amount numeric(12,2) NOT NULL DEFAULT 20.00 CHECK (subscription_amount >= 0);
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS subscription_status text NOT NULL DEFAULT 'inactive';
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS subscription_next_due date;
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS last_payment_at timestamptz;

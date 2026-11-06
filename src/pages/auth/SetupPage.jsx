@@ -347,7 +347,7 @@ export default function SetupPage() {
                     <Field
                       label="Your personal email"
                       required
-                      hint="We will send a 6-digit code to this address."
+                      hint="We will send a 6-digit code to this address. You can use the same address as your company email."
                     >
                       <Input
                         type="email"
