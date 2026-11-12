@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   Car,
   CheckCircle2,
   CircleDollarSign,
+  Download,
   FileText,
   Mail,
   MapPin,
@@ -61,11 +62,13 @@ import {
   PAYMENT_METHODS,
   titleCase,
 } from '@/lib/utils'
+import { downloadRentalAgreement, printRentalAgreement } from '@/lib/rentalAgreement'
 
 export default function RentalDetailPage() {
   const { id } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const toast = useToast()
   const { user, company, isAdmin } = useAuth()
   const { repository } = useRepository()
@@ -75,12 +78,28 @@ export default function RentalDetailPage() {
   const currency = company?.currency || 'USD'
   const money = (value) => formatMoney(value, currency)
 
+  const [agreementOpen, setAgreementOpen] = useState(Boolean(location.state?.agreement))
   const [returnOpen, setReturnOpen] = useState(searchParams.get('action') === 'return')
   const [paymentOpen, setPaymentOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [viewerPhoto, setViewerPhoto] = useState(null)
+
+  const closeAgreement = () => {
+    setAgreementOpen(false)
+    navigate(location.pathname, { replace: true, state: null })
+  }
+
+  const handleDownloadAgreement = () => {
+    downloadRentalAgreement(data, company, currency)
+  }
+
+  const handlePrintAgreement = () => {
+    if (!printRentalAgreement(data, company, currency)) {
+      toast.error('The agreement could not be opened. Allow pop-ups and try again.')
+    }
+  }
 
   const rental = useResource(
     () => repository.rentals.get(id, { companyId }),
@@ -161,7 +180,7 @@ export default function RentalDetailPage() {
           <>
             <Button variant="secondary" onClick={() => window.print()}>
               <Printer size={15} />
-              Print
+              Print rental details
             </Button>
             {canEdit && (
               <Button variant="secondary" onClick={() => navigate(`/app/rentals/${id}/edit`)}>
@@ -178,6 +197,27 @@ export default function RentalDetailPage() {
           </>
         }
       />
+
+      <Card className="mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-4 p-5">
+          <div>
+            <h2 className="text-sm font-semibold text-ink-900">Rental agreement</h2>
+            <p className="mt-1 text-sm text-ink-500">
+              Download a copy or print the agreement for the customer to review and sign.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={handleDownloadAgreement}>
+              <Download size={15} />
+              Download agreement
+            </Button>
+            <Button variant="secondary" onClick={handlePrintAgreement}>
+              <Printer size={15} />
+              Print agreement
+            </Button>
+          </div>
+        </div>
+      </Card>
 
       {data.computed_status === 'overdue' && (
         <Alert
@@ -564,6 +604,64 @@ export default function RentalDetailPage() {
         confirmLabel="Delete permanently"
         message={`Rental ${data.reference} and its payment records will be removed. This cannot be undone — cancelling is usually safer.`}
       />
+
+      <Modal
+        open={agreementOpen}
+        onClose={closeAgreement}
+        title="Rental agreement generated"
+        description="The agreement between the customer and the rental company is ready. Download it or print it for the customer to sign."
+        size="sm"
+        footer={
+          <>
+            <Button variant="secondary" onClick={handleDownloadAgreement}>
+              <Download size={15} />
+              Download agreement
+            </Button>
+            <Button onClick={handlePrintAgreement}>
+              <Printer size={15} />
+              Print agreement
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3 text-sm">
+          <Alert tone="success" icon={CheckCircle2}>
+            Rental <strong>{data.reference}</strong> was captured and the agreement has been
+            generated automatically.
+          </Alert>
+          <dl className="space-y-2 rounded-lg bg-ink-50 p-4">
+            <div className="flex justify-between gap-3">
+              <dt className="text-ink-500">Customer</dt>
+              <dd className="text-right font-medium text-ink-800">
+                {data.customer?.full_name || '—'}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-ink-500">Vehicle</dt>
+              <dd className="text-right font-medium text-ink-800">
+                {[data.car?.make, data.car?.model].filter(Boolean).join(' ') || '—'} ·{' '}
+                {data.car?.registration || '—'}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-ink-500">Rental period</dt>
+              <dd className="text-right font-medium text-ink-800">
+                {data.days} day{data.days === 1 ? '' : 's'}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-3 border-t border-ink-200 pt-2">
+              <dt className="font-semibold text-ink-700">Total</dt>
+              <dd className="text-right font-semibold text-ink-900">
+                {money(data.computed_total)}
+              </dd>
+            </div>
+          </dl>
+          <p className="text-xs text-ink-400">
+            Print the agreement and give it to the customer to review and sign before handing over
+            the vehicle.
+          </p>
+        </div>
+      </Modal>
 
       <Modal
         open={Boolean(viewerPhoto)}

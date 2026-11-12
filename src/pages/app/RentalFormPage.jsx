@@ -256,7 +256,7 @@ export default function RentalFormPage() {
           user,
         )
         toast.success(`Rental ${created.reference} captured.`)
-        navigate(`/app/rentals/${created.id}`)
+        navigate(`/app/rentals/${created.id}`, { state: { agreement: true } })
       }
     } catch (cause) {
       setServerError(cause.message)
