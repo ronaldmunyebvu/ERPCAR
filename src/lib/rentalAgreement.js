@@ -139,7 +139,7 @@ export function buildRentalAgreementHtml(rental, company, currency) {
     <p>________________________________________________________________________________</p>
 
     <div class="signatures">
-      <div><div class="signature"></div><div class="signature-label">Customer signature · Print name: ${escapeHtml(customer.full_name || '')} · Date:</div></div>
+      <div><div class="signature"></div><div class="signature-label">Customer signature · Date:</div></div>
       <div><div class="signature"></div><div class="signature-label">Rental company representative · Print name · Date:</div></div>
       <div><div class="signature"></div><div class="signature-label">Witness signature · Print name · Date:</div></div>
       <div><div class="signature"></div><div class="signature-label">Witness signature · Print name · Date:</div></div>
