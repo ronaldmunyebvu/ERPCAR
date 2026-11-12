@@ -39,15 +39,18 @@ export default function CustomersPage() {
   const focusId = searchParams.get('focus')
 
   const customers = useResource(
-    () => repository.customers.list({ companyId, search: debouncedSearch }),
-    `customers|${companyId}|${debouncedSearch}`,
+    () =>
+      repository
+        ? repository.customers.list({ companyId, search: debouncedSearch })
+        : Promise.resolve([]),
+    `customers|${Boolean(repository)}|${companyId}|${debouncedSearch}`,
   )
   const history = useResource(
     () =>
-      focusId
+      focusId && repository
         ? repository.customers.history(focusId, { companyId })
         : Promise.resolve([]),
-    `history|${focusId}|${companyId}`,
+    `history|${Boolean(repository)}|${focusId}|${companyId}`,
   )
   const focusCustomer = (customers.data || []).find((customer) => customer.id === focusId)
 
@@ -142,6 +145,10 @@ export default function CustomersPage() {
 
         {customers.loading ? (
           <Spinner />
+        ) : customers.error ? (
+          <Alert tone="danger" title="Could not load customers">
+            {customers.error.message}
+          </Alert>
         ) : tab === 'history' ? (
           <CustomerHistory
             customer={focusCustomer}

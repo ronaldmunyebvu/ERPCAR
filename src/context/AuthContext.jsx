@@ -1,11 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { getRepository, isLiveMode } from '@/db'
 import * as authApi from '@/db/remote/auth.api'
-import {
-  clearOfflineAccount,
-  getOfflineAccount,
-  saveOfflineAccount,
-} from '@/db/offline/local'
 import { signToken, verifyToken } from '@/lib/crypto'
 import { effectiveDuties, hasDuty } from '@/lib/duties'
 
@@ -19,8 +14,7 @@ import { effectiveDuties, hasDuty } from '@/lib/duties'
  * the bundle.
  *
  * Demo mode has no server to hold a cookie, so it keeps the original local
- * token purely to preserve the offline experience. That path stores only
- * browser-local mock data and is never used in production.
+ * token for the browser-local mock data. That path is never used in production.
  */
 
 const AuthContext = createContext(null)
@@ -55,31 +49,13 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let cancelled = false
 
-    const restore = isLiveMode()
-      ? authApi.restore().catch((cause) => {
-          if (cause.status === 0) {
-            const cached = getOfflineAccount()
-            if (cached) return cached
-          }
-          throw cause
-        })
-      : accountFromMockToken()
+    const restore = isLiveMode() ? authApi.restore() : accountFromMockToken()
 
     restore
       .then((account) => {
-        if (cancelled) return
-        if (!account) {
-          if (isLiveMode() && navigator.onLine) clearOfflineAccount()
-          return
-        }
+        if (cancelled || !account) return
         setUser(account.user)
         setCompany(account.company)
-        if (isLiveMode() && navigator.onLine) {
-          saveOfflineAccount(account)
-          getRepository()
-            .then((repo) => repo.bootstrap(account.company.id))
-            .catch((cause) => console.error('[offline] could not refresh company cache', cause))
-        }
       })
       .catch((cause) => {
         if (!cancelled) setError(cause.message)
@@ -94,18 +70,12 @@ export function AuthProvider({ children }) {
   }, [])
 
   /**
-   * Puts a freshly issued account into state and warms the offline cache.
+   * Puts a freshly issued account into state.
    *
    * Every path that ends a login — password, confirmation link — finishes here
    * so none of them can leave the session half-built.
    */
   const adopt = useCallback((account) => {
-    if (isLiveMode()) {
-      saveOfflineAccount(account)
-      getRepository()
-        .then((repo) => repo.bootstrap(account.company.id))
-        .catch((cause) => console.error('[offline] could not prepare company cache', cause))
-    }
     setUser(account.user)
     setCompany(account.company)
     return account.user
@@ -197,16 +167,13 @@ export function AuthProvider({ children }) {
   const signOut = useCallback(async () => {
     if (isLiveMode()) await authApi.signOut().catch(() => {})
     else clearMockSession()
-    if (isLiveMode()) clearOfflineAccount()
     setUser(null)
     setCompany(null)
   }, [])
 
   const refresh = useCallback(async () => {
     if (!user) return null
-    const account = isLiveMode() && !navigator.onLine
-      ? getOfflineAccount()
-      : isLiveMode()
+    const account = isLiveMode()
       ? await authApi.restore()
       : await getRepository().then((repo) => repo.auth.findUserById(user.id))
     if (account) {

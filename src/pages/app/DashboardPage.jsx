@@ -43,19 +43,22 @@ export default function DashboardPage() {
   const companyId = company?.id
 
   const dash = useResource(
-    () => repository.reports.dashboard(companyId),
+    () => (repository ? repository.reports.dashboard(companyId) : Promise.resolve(null)),
     `dash|${companyId}|${repository?.mode}`,
   )
   const revenue = useResource(
-    () => repository.reports.revenue(companyId, { from: daysAgoIso(29), to: new Date().toISOString() }),
+    () =>
+      repository
+        ? repository.reports.revenue(companyId, { from: daysAgoIso(29), to: new Date().toISOString() })
+        : Promise.resolve(null),
     `rev|${companyId}|${repository?.mode}`,
   )
   const availableCars = useResource(
-    () => repository.cars.list({ companyId, status: 'available' }),
+    () => (repository ? repository.cars.list({ companyId, status: 'available' }) : Promise.resolve([])),
     `availableCars|${companyId}|${repository?.mode}`,
   )
   const activeRentals = useResource(
-    () => repository.rentals.list({ companyId, status: 'active' }),
+    () => (repository ? repository.rentals.list({ companyId, status: 'active' }) : Promise.resolve([])),
     `activeRentals|${companyId}|${repository?.mode}`,
   )
   const toast = useToast()

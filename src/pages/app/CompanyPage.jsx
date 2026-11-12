@@ -40,8 +40,11 @@ export default function CompanyPage() {
   const [errors, setErrors] = useState({})
 
   const counts = useResource(
-    () => (company?.id ? repository.reports.dashboard(company.id) : Promise.resolve(null)),
-    `company|${company?.id}`,
+    () =>
+      company?.id && repository
+        ? repository.reports.dashboard(company.id)
+        : Promise.resolve(null),
+    `company|${Boolean(repository)}|${company?.id}`,
   )
 
   const [values, setValues] = useState(() => ({

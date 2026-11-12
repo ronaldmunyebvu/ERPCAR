@@ -50,7 +50,6 @@ function ownsArg(index, table, key = 'id') {
 export const OPERATIONS = {
   /* ------------------------------------------------------------- top level */
   'bootstrap': { auth: 'public' },
-  'offline.snapshot': { auth: 'member', force: [{ index: 0, key: null, from: FROM.COMPANY }] },
 
   /* ------------------------------------------------------------------ auth */
   'auth.isSetupComplete': { auth: 'public' },

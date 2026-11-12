@@ -42,8 +42,11 @@ export default function AccountPage() {
   const [savingPassword, setSavingPassword] = useState(false)
 
   const me = useResource(
-    () => (user?.id ? repository.auth.findUserById(user.id) : Promise.resolve(null)),
-    `account|${user?.id}`,
+    () =>
+      user?.id && repository
+        ? repository.auth.findUserById(user.id)
+        : Promise.resolve(null),
+    `account|${Boolean(repository)}|${user?.id}`,
   )
 
   const account = me.data?.user ?? null

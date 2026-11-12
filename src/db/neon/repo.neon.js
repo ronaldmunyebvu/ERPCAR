@@ -347,42 +347,6 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
       await one('SELECT 1')
       return true
     },
-    offline: {
-      async snapshot(companyId) {
-        const [company, users, cars, customers, rentals, payments, cashbook, activity] =
-          await Promise.all([
-            one('SELECT * FROM companies WHERE id = $1', [companyId]),
-            rows(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE company_id = $1 ORDER BY full_name`, [companyId]),
-            rows('SELECT * FROM cars WHERE company_id = $1 ORDER BY registration', [companyId]),
-            rows('SELECT * FROM customers WHERE company_id = $1 ORDER BY full_name', [companyId]),
-            rows('SELECT * FROM rentals WHERE company_id = $1 ORDER BY pickup_at DESC', [companyId]),
-            rows('SELECT * FROM payments WHERE company_id = $1 ORDER BY received_at DESC', [companyId]),
-            rows('SELECT * FROM cashbook_entries WHERE company_id = $1 ORDER BY occurred_at DESC', [companyId]),
-            rows('SELECT * FROM activity_log WHERE company_id = $1 ORDER BY created_at DESC LIMIT 500', [companyId]),
-          ])
-        return {
-          version: 2,
-          seeded_at: new Date().toISOString(),
-          companies: company ? [company] : [],
-          users,
-          cars: cars.map((car) => ({ ...car, daily_rate: num(car.daily_rate) })),
-          customers,
-          rentals: rentals.map((rental) => ({
-            ...rental,
-            daily_rate: num(rental.daily_rate),
-            total_amount: num(rental.total_amount),
-            deposit_amount: num(rental.deposit_amount),
-            additional_charges: Array.isArray(rental.additional_charges)
-              ? rental.additional_charges
-              : JSON.parse(rental.additional_charges || '[]'),
-          })),
-          payments: payments.map(shapePaymentRow),
-          cashbook: cashbook.map((entry) => ({ ...entry, amount: num(entry.amount) })),
-          activity,
-          password_resets: [],
-        }
-      },
-    },
     onChange() {
       return () => {}
     },
