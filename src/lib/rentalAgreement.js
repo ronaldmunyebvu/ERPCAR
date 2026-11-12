@@ -140,9 +140,6 @@ export function buildRentalAgreementHtml(rental, company, currency) {
 
     <div class="signatures">
       <div><p style="margin:0 0 4px"><strong>Customer:</strong> ${escapeHtml(customer.full_name || '')}</p><div class="signature"></div><div class="signature-label">Signature · Date:</div></div>
-      <div><div class="signature"></div><div class="signature-label">Rental company representative · Print name · Date:</div></div>
-      <div><div class="signature"></div><div class="signature-label">Witness signature · Print name · Date:</div></div>
-      <div><div class="signature"></div><div class="signature-label">Witness signature · Print name · Date:</div></div>
     </div>
 
     <footer>Agreement ${escapeHtml(agreementNumber)} · Each party should retain a signed copy.</footer>
