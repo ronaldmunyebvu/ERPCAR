@@ -147,6 +147,27 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
     return found[0] ?? null
   }
 
+  // Databases created before fuel capture and advance bookings were added are
+  // missing the enum value and columns. Applying the additive changes lazily
+  // keeps existing installations working without a manual migration; every
+  // statement is idempotent, so this is a no-op once the schema is current.
+  let rentalSchemaReady = null
+  function ensureRentalSchema() {
+    if (!rentalSchemaReady) {
+      rentalSchemaReady = (async () => {
+        await rows(`ALTER TYPE rental_status ADD VALUE IF NOT EXISTS 'booked'`)
+        await rows(`ALTER TABLE rentals ADD COLUMN IF NOT EXISTS fuel_level text
+                    CHECK (fuel_level IN ('full', 'half', 'empty', 'bars'))`)
+        await rows(`ALTER TABLE rentals ADD COLUMN IF NOT EXISTS fuel_bars int
+                    CHECK (fuel_bars >= 0)`)
+      })().catch((error) => {
+        rentalSchemaReady = null
+        throw error
+      })
+    }
+    return rentalSchemaReady
+  }
+
   async function logActivity(entry) {
     await rows(
       `INSERT INTO activity_log (company_id, user_id, action, entity, entity_id, summary, metadata)
@@ -1598,9 +1619,9 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           .op('r.pickup_at', '<=', to)
 
         if (status === 'overdue') {
-          f.raw(`(r.status IN ('active','booked','overdue') AND r.actual_return_at IS NULL AND r.expected_return_at < now())`)
+          f.raw(`(r.status::text IN ('active','booked','overdue') AND r.actual_return_at IS NULL AND r.expected_return_at < now())`)
         } else if (status && status !== 'all') {
-          f.eq('r.status', status)
+          f.raw('r.status::text = $1', [status])
         }
 
         if (search) {
@@ -1684,7 +1705,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (car.status === 'rented') {
           const activeRental = await one(
             `SELECT reference, expected_return_at FROM rentals
-             WHERE car_id = $1 AND status IN ('active','booked','overdue')
+             WHERE car_id = $1 AND status::text IN ('active','booked','overdue')
                AND $2::timestamptz < expected_return_at
                AND $3::timestamptz > pickup_at
              LIMIT 1`,
@@ -1698,7 +1719,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         }
         const clash = await one(
           `SELECT reference, expected_return_at FROM rentals
-           WHERE car_id = $1 AND status IN ('active','booked','overdue')
+           WHERE car_id = $1 AND status::text IN ('active','booked','overdue')
              AND $2::timestamptz < expected_return_at
              AND $3::timestamptz > pickup_at
            LIMIT 1`,
@@ -1721,6 +1742,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         const reference =
           input.reference || `RNT-${year}-${String(num(highest?.value) + 1).padStart(4, '0')}`
 
+        await ensureRentalSchema()
         const rental = await one(
           `INSERT INTO rentals (id, company_id, car_id, customer_id, created_by, reference, pickup_at,
                                 expected_return_at, daily_rate, expected_km_per_day, days, total_amount,
@@ -1786,6 +1808,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
       },
 
       async update(id, patch, actor) {
+        await ensureRentalSchema()
         const current = await one('SELECT * FROM rentals WHERE id = $1', [id])
         if (!current) throw new Error('Rental not found')
         const pickup = patch.pickup_at ?? current.pickup_at
@@ -2267,7 +2290,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             ),
             rows(
               `${RENTAL_SELECT} WHERE r.company_id = $1
-                AND r.status IN ('active','booked','overdue') AND r.actual_return_at IS NULL
+                AND r.status::text IN ('active','booked','overdue') AND r.actual_return_at IS NULL
                 AND r.expected_return_at < now()
                 ORDER BY r.expected_return_at`,
               [companyId],
@@ -2408,7 +2431,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
 
         const statusRows = await rows(
           `SELECT status,
-                  (status IN ('active','booked','overdue') AND actual_return_at IS NULL
+                  (status::text IN ('active','booked','overdue') AND actual_return_at IS NULL
                     AND expected_return_at < now()) AS derived_overdue,
                   count(*)::int AS count
            FROM rentals
