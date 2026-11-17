@@ -22,6 +22,7 @@ import {
   Button,
   Card,
   CardHeader,
+  Checkbox,
   Field,
   Input,
   Select,
@@ -38,6 +39,7 @@ import {
   daysBetween,
   currencySymbol,
   PAYMENT_METHODS,
+  FUEL_LEVELS,
   titleCase,
   toDate,
 } from '@/lib/utils'
@@ -58,8 +60,12 @@ function defaultForm() {
     deposit_amount: '',
     start_mileage: '',
     expected_km_per_day: '',
+    fuel_level: '',
+    fuel_bars: '',
     additional_charges: [],
     payment_method: 'cash',
+    advance_booking: false,
+    amount_paid: '',
     notes: '',
   }
 }
@@ -83,6 +89,7 @@ export default function RentalFormPage() {
   const [customerModalOpen, setCustomerModalOpen] = useState(false)
   const [status, setStatus] = useState('active')
   const [pickupPhotos, setPickupPhotos] = useState([])
+  const [paidTouched, setPaidTouched] = useState(false)
 
   const cars = useResource(
     () => repository.cars.list({ companyId, status: 'available' }),
@@ -121,17 +128,21 @@ export default function RentalFormPage() {
       start_mileage: rental.start_mileage != null ? String(rental.start_mileage) : '',
       expected_km_per_day:
         rental.expected_km_per_day != null ? String(rental.expected_km_per_day) : '',
+      fuel_level: rental.fuel_level || '',
+      fuel_bars: rental.fuel_bars != null ? String(rental.fuel_bars) : '',
       additional_charges: (rental.additional_charges || []).map((charge) => ({ ...charge })),
       payment_method: rental.payments?.[0]?.method || 'cash',
+      advance_booking: rental.status === 'booked',
+      amount_paid: '',
       notes: rental.notes || '',
     })
     setStatus(rental.status)
   }, [isEdit, existing.data])
 
   const selectedCar = useMemo(() => {
-    const pool = isEdit ? allCars.data || [] : cars.data || []
+    const pool = isEdit || form.advance_booking ? allCars.data || [] : cars.data || []
     return pool.find((car) => car.id === form.car_id) || null
-  }, [allCars.data, cars.data, form.car_id, isEdit])
+  }, [allCars.data, cars.data, form.car_id, form.advance_booking, isEdit])
 
   const selectedCustomer = (customers.data || []).find(
     (customer) => customer.id === form.customer_id,
@@ -164,9 +175,34 @@ export default function RentalFormPage() {
   const extrasTotal = form.additional_charges.reduce((sum, charge) => sum + (Number(charge.amount) || 0), 0)
   const rentalTotal = isEdit && existing.data ? existing.data.computed_total : rate * days + extrasTotal
   const paidSoFar = existing.data?.computed_paid || 0
-  const balance = isEdit ? Math.max(0, rentalTotal - paidSoFar) : 0
+  const amountPaid = form.amount_paid === '' ? 0 : Number(form.amount_paid)
+  const paidNow = isEdit ? paidSoFar : Number.isFinite(amountPaid) ? amountPaid : 0
+  const balance = Math.max(0, rentalTotal - paidNow)
+
+  // Default the amount paid to the full total, or to nothing for an advance
+  // booking, until the user edits the field themselves.
+  useEffect(() => {
+    if (isEdit || paidTouched) return
+    const suggested = form.advance_booking ? 0 : rentalTotal
+    const next = suggested > 0 ? suggested.toFixed(2) : '0'
+    setForm((current) => (current.amount_paid === next ? current : { ...current, amount_paid: next }))
+  }, [isEdit, paidTouched, form.advance_booking, rentalTotal])
 
   const set = (field) => (event) => setForm((current) => ({ ...current, [field]: event.target.value }))
+
+  const setAmountPaid = (event) => {
+    setPaidTouched(true)
+    setForm((current) => ({ ...current, amount_paid: event.target.value }))
+  }
+
+  const payFullAmount = () => {
+    setPaidTouched(true)
+    setForm((current) => ({ ...current, amount_paid: rentalTotal ? rentalTotal.toFixed(2) : '0' }))
+  }
+
+  const toggleAdvance = (event) => {
+    setForm((current) => ({ ...current, advance_booking: event.target.checked }))
+  }
 
   const addCharge = () =>
     setForm((current) => ({
@@ -199,14 +235,31 @@ export default function RentalFormPage() {
       }
     }
     if (rate < 0) found.daily_rate = 'Daily rate cannot be negative.'
-    const needsExpectedMileage = !isEdit || status === 'active' || status === 'overdue'
+    const needsExpectedMileage = isEdit
+      ? status === 'active' || status === 'overdue'
+      : !form.advance_booking
     if (needsExpectedMileage && !(expectedKmPerDay > 0)) {
       found.expected_km_per_day = 'Enter the expected kilometres per day for this rental.'
     }
-    const needsMileage = !isEdit || status === 'active'
+    const needsMileage = isEdit ? status === 'active' : !form.advance_booking
     if (needsMileage) {
       if (form.start_mileage === '' || Number(form.start_mileage) < 0) {
         found.start_mileage = 'Enter the vehicle mileage at pickup.'
+      }
+    }
+    const fuelWasRecorded = Boolean(existing.data?.fuel_level)
+    const needsFuel = isEdit ? fuelWasRecorded || status === 'active' : !form.advance_booking
+    if (needsFuel && !form.fuel_level) {
+      found.fuel_level = 'Choose the fuel level at pickup.'
+    }
+    if (form.fuel_level === 'bars' && !(Number.isInteger(Number(form.fuel_bars)) && Number(form.fuel_bars) >= 1)) {
+      found.fuel_bars = 'Enter the number of bars shown on the fuel gauge.'
+    }
+    if (!isEdit) {
+      if (!Number.isFinite(amountPaid) || amountPaid < 0) {
+        found.amount_paid = 'Enter a valid amount paid (0 or more).'
+      } else if (amountPaid > rentalTotal + 0.001) {
+        found.amount_paid = 'Amount paid cannot be more than the total due.'
       }
     }
     setErrors(found)
@@ -227,11 +280,24 @@ export default function RentalFormPage() {
       deposit_amount: Number(form.deposit_amount) || 0,
       start_mileage: form.start_mileage === '' ? undefined : Number(form.start_mileage),
       ...(expectedKmPerDay > 0 ? { expected_km_per_day: expectedKmPerDay } : {}),
+      ...(form.fuel_level
+        ? {
+            fuel_level: form.fuel_level,
+            fuel_bars: form.fuel_level === 'bars' ? Number(form.fuel_bars) : null,
+          }
+        : {}),
       additional_charges: form.additional_charges
         .filter((charge) => charge.label?.trim())
         .map((charge) => ({ label: charge.label.trim(), amount: Number(charge.amount) || 0 })),
       notes: form.notes,
-      ...(!isEdit ? { pickup_photos: pickupPhotos } : {}),
+      ...(!isEdit
+        ? {
+            pickup_photos: pickupPhotos,
+            advance_booking: form.advance_booking,
+            amount_paid: paidNow,
+            payment_method: form.payment_method,
+          }
+        : {}),
     }
 
     setBusy(true)
@@ -249,13 +315,15 @@ export default function RentalFormPage() {
           {
             ...payload,
             total_amount: rate * days,
-            amount_paid: rentalTotal,
-            payment_method: form.payment_method,
             created_by: user?.id,
           },
           user,
         )
-        toast.success(`Rental ${created.reference} captured.`)
+        toast.success(
+          form.advance_booking
+            ? `Rental ${created.reference} booked in advance.`
+            : `Rental ${created.reference} captured.`,
+        )
         navigate(`/app/rentals/${created.id}`, { state: { agreement: true } })
       }
     } catch (cause) {
@@ -273,10 +341,21 @@ export default function RentalFormPage() {
     toast.success(`${created.full_name} added to customers.`)
   }
 
-  if (cars.loading || existing.loading) return <Spinner label="Preparing form…" />
+  if (cars.loading || allCars.loading || existing.loading) {
+    return <Spinner label="Preparing form…" />
+  }
 
-  const availableCars = (isEdit ? allCars.data || [] : cars.data || []).filter(
-    (car) => car.id === form.car_id || car.status === 'available',
+  const carPool = form.advance_booking
+    ? allCars.data || []
+    : isEdit
+      ? allCars.data || []
+      : cars.data || []
+  const availableCars = carPool.filter(
+    (car) =>
+      car.id === form.car_id ||
+      (form.advance_booking
+        ? car.status !== 'maintenance' && car.status !== 'inactive'
+        : car.status === 'available'),
   )
 
   return (
@@ -314,8 +393,23 @@ export default function RentalFormPage() {
         <div className="space-y-4 lg:col-span-2">
           {/* Vehicle */}
           <Card>
-            <CardHeader title="Vehicle" icon={Car} description="Only available vehicles are listed." />
+            <CardHeader
+              title="Vehicle"
+              icon={Car}
+              description={
+                form.advance_booking
+                  ? 'Any bookable vehicle can be reserved for a future period without marking it as rented now.'
+                  : 'Only available vehicles are listed.'
+              }
+            />
             <div className="space-y-3 p-5">
+              <Checkbox
+                checked={form.advance_booking}
+                onChange={toggleAdvance}
+                disabled={isEdit}
+                label="Book in advance"
+                description="Reserve this vehicle for a future period. It stays available and is not marked as rented until the rental starts."
+              />
               <Field label="Vehicle to rent" required error={errors.car_id}>
                 <Select
                   value={form.car_id}
@@ -324,7 +418,11 @@ export default function RentalFormPage() {
                 >
                   <option value="">Select a vehicle…</option>
                   {availableCars.map((car) => (
-                    <option key={car.id} value={car.id} disabled={car.status !== 'available' && car.id !== form.car_id}>
+                    <option
+                      key={car.id}
+                      value={car.id}
+                      disabled={!form.advance_booking && car.status !== 'available' && car.id !== form.car_id}
+                    >
                       {car.registration} — {car.make} {car.model} ({car.year}) ·{' '}
                       {currencySymbol(currency)}
                       {car.daily_rate}/day{car.status !== 'available' ? ` — ${car.status}` : ''}
@@ -333,9 +431,9 @@ export default function RentalFormPage() {
                 </Select>
               </Field>
 
-              {cars.error ? (
+              {(form.advance_booking ? allCars.error : cars.error) ? (
                 <Alert tone="danger" title="Could not load vehicles">
-                  {cars.error.message}
+                  {(form.advance_booking ? allCars.error : cars.error).message}
                 </Alert>
               ) : selectedCar ? (
                 <div className="flex flex-wrap items-center gap-3 rounded-lg bg-ink-50 px-4 py-3">
@@ -357,16 +455,16 @@ export default function RentalFormPage() {
                 </div>
               ) : (
                 <Alert tone="info" icon={Info}>
-                  {cars.data?.length
+                  {carPool.length
                     ? 'Pick a vehicle to see its details and daily rate.'
-                    : 'No vehicles are currently available. Mark a vehicle as available in the fleet first.'}
+                    : 'No vehicles are available to book. Add a vehicle to the fleet first.'}
                 </Alert>
               )}
 
               {selectedCar && (!isEdit || status === 'active') && (
                 <Field
                   label="Odometer at pickup (km)"
-                  required
+                  required={isEdit ? status === 'active' : !form.advance_booking}
                   error={errors.start_mileage}
                   hint={
                     selectedCar.mileage != null
@@ -387,9 +485,57 @@ export default function RentalFormPage() {
               )}
 
               {selectedCar && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field
+                    label="Fuel level at pickup"
+                    required={
+                      isEdit
+                        ? Boolean(existing.data?.fuel_level) || status === 'active'
+                        : !form.advance_booking
+                    }
+                    error={errors.fuel_level}
+                    hint="Recorded at handover; checked again when the vehicle is returned."
+                  >
+                    <Select
+                      value={form.fuel_level}
+                      onChange={set('fuel_level')}
+                      invalid={Boolean(errors.fuel_level)}
+                    >
+                      <option value="">Select fuel level…</option>
+                      {FUEL_LEVELS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  {form.fuel_level === 'bars' && (
+                    <Field
+                      label="Number of bars"
+                      required
+                      error={errors.fuel_bars}
+                      hint="Enter the number of bars lit on the fuel gauge, e.g. 6."
+                    >
+                      <Input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={form.fuel_bars}
+                        onChange={set('fuel_bars')}
+                        placeholder="e.g. 6"
+                        invalid={Boolean(errors.fuel_bars)}
+                      />
+                    </Field>
+                  )}
+                </div>
+              )}
+
+              {selectedCar && (
                 <Field
                   label="Expected kilometres per day (km)"
-                  required
+                  required={
+                    isEdit ? status === 'active' || status === 'overdue' : !form.advance_booking
+                  }
                   error={errors.expected_km_per_day}
                   hint={`Allowance: ${formatNumber(mileageAllowance)} km over ${days} day${
                     days === 1 ? '' : 's'
@@ -596,17 +742,35 @@ export default function RentalFormPage() {
               {!isEdit && (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field
-                    label="Payment recorded"
-                    hint="The full rental total is recorded as paid when you capture this rental."
+                    label="Amount paid now"
+                    required
+                    error={errors.amount_paid}
+                    hint="Enter what the customer pays today. Any unpaid amount stays on the rental as an outstanding balance until settled."
                   >
-                    <Input
-                      type="number"
-                      value={rentalTotal.toFixed(2)}
-                      readOnly
-                    />
+                    <div className="flex gap-2">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={form.amount_paid}
+                        onChange={setAmountPaid}
+                        placeholder="0.00"
+                        invalid={Boolean(errors.amount_paid)}
+                      />
+                      <Button variant="secondary" onClick={payFullAmount} type="button">
+                        Pay full
+                      </Button>
+                    </div>
                   </Field>
-                  <Field label="Payment method">
-                    <Select value={form.payment_method} onChange={set('payment_method')}>
+                  <Field
+                    label="Payment method"
+                    hint={paidNow > 0 ? undefined : 'Shown once an amount is paid.'}
+                  >
+                    <Select
+                      value={form.payment_method}
+                      onChange={set('payment_method')}
+                      disabled={!(paidNow > 0)}
+                    >
                       {PAYMENT_METHODS.map((method) => (
                         <option key={method} value={method}>
                           {titleCase(method)}
@@ -621,6 +785,7 @@ export default function RentalFormPage() {
                 <Field label="Rental status">
                   <Select value={status} onChange={(event) => setStatus(event.target.value)}>
                     <option value="active">Active</option>
+                    <option value="booked">Booked (advance)</option>
                     <option value="completed">Completed</option>
                     <option value="cancelled">Cancelled</option>
                   </Select>
@@ -702,6 +867,14 @@ export default function RentalFormPage() {
                     </dd>
                   </div>
                 )}
+                {!isEdit && paidNow > 0 && (
+                  <div className="flex justify-between">
+                    <dt className="text-ink-500">Paid now</dt>
+                    <dd className="font-medium text-emerald-700 tabular-nums">
+                      −{formatMoney(paidNow, currency)}
+                    </dd>
+                  </div>
+                )}
                 <div className="flex justify-between border-t border-ink-100 pt-2 text-base">
                   <dt className="font-semibold text-ink-800">Total</dt>
                   <dd className="font-semibold text-ink-900 tabular-nums">
@@ -730,7 +903,7 @@ export default function RentalFormPage() {
                   ) : (
                     <>
                       <CheckCircle2 size={16} />
-                      Capture rental
+                      {form.advance_booking ? 'Book rental' : 'Capture rental'}
                     </>
                   )}
                 </Button>
@@ -747,8 +920,9 @@ export default function RentalFormPage() {
               {!isEdit && (
                 <p className="mt-4 flex gap-2 text-xs leading-relaxed text-ink-400">
                   <Trash2 size={14} className="mt-0.5 shrink-0" />
-                  Capturing a rental immediately marks the vehicle as rented and logs the booking
-                  against your name.
+                  {form.advance_booking
+                    ? 'Booking in advance reserves the vehicle for the chosen dates but keeps it available until the rental starts. Record the fuel level and odometer on pickup.'
+                    : 'Capturing a rental immediately marks the vehicle as rented and logs the booking against your name.'}
                 </p>
               )}
             </div>

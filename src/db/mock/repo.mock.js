@@ -224,6 +224,23 @@ function applyLicenseDates(target, input) {
   }
 }
 
+/**
+ * Validates the fuel level captured at pickup. A bar gauge reading must carry
+ * the number of bars shown, so the count is only kept for that option.
+ */
+function normaliseFuel(input) {
+  const level = String(input.fuel_level ?? '').trim()
+  if (!['full', 'half', 'empty', 'bars'].includes(level)) {
+    throw new Error('Choose the fuel level at pickup.')
+  }
+  if (level !== 'bars') return { fuel_level: level, fuel_bars: null }
+  const bars = Number(input.fuel_bars)
+  if (!Number.isInteger(bars) || bars < 1) {
+    throw new Error('Enter the number of bars shown on the fuel gauge.')
+  }
+  return { fuel_level: level, fuel_bars: bars }
+}
+
 /* =============================================================== export */
 
 export function createMockRepository() {
@@ -1411,14 +1428,34 @@ export function createMockRepository() {
 
       async create(input, actor) {
         const data = await db()
-        const startMileage = Number(input.start_mileage)
-        if (!Number.isFinite(startMileage) || startMileage < 0) {
+        let startMileage = null
+        if (input.start_mileage !== undefined && input.start_mileage !== null && input.start_mileage !== '') {
+          const parsed = Number(input.start_mileage)
+          if (!Number.isFinite(parsed) || parsed < 0) {
+            throw new Error('Enter the vehicle mileage at pickup.')
+          }
+          startMileage = Math.trunc(parsed)
+        } else if (!input.advance_booking) {
           throw new Error('Enter the vehicle mileage at pickup.')
         }
-        const expectedKmPerDay = Number(input.expected_km_per_day)
-        if (!Number.isFinite(expectedKmPerDay) || expectedKmPerDay <= 0) {
+        let expectedKmPerDay = null
+        if (
+          input.expected_km_per_day !== undefined &&
+          input.expected_km_per_day !== null &&
+          input.expected_km_per_day !== ''
+        ) {
+          const parsed = Number(input.expected_km_per_day)
+          if (!Number.isFinite(parsed) || parsed <= 0) {
+            throw new Error('Enter the expected kilometres per day for this rental.')
+          }
+          expectedKmPerDay = Math.trunc(parsed)
+        } else if (!input.advance_booking) {
           throw new Error('Enter the expected kilometres per day for this rental.')
         }
+        const fuel =
+          input.advance_booking && !input.fuel_level
+            ? { fuel_level: null, fuel_bars: null }
+            : normaliseFuel(input)
         const pickupPhotos = normalisePhotos(input.pickup_photos, 'pickup', true)
         const car = assertFound(data.cars.find((item) => item.id === input.car_id), 'Vehicle')
         const customer = assertFound(
@@ -1428,11 +1465,13 @@ export function createMockRepository() {
         if (car.status === 'maintenance' || car.status === 'inactive') {
           throw new Error(`${car.registration} is ${car.status} and cannot be rented out.`)
         }
+        const isBooked = (rental) =>
+          rental.status === 'active' || rental.status === 'overdue' || rental.status === 'booked'
         if (car.status === 'rented') {
           const activeRental = data.rentals.find(
             (rental) =>
               rental.car_id === car.id &&
-              (rental.status === 'active' || rental.status === 'overdue') &&
+              isBooked(rental) &&
               toDate(input.pickup_at) < toDate(rental.expected_return_at) &&
               toDate(input.expected_return_at) > toDate(rental.pickup_at),
           )
@@ -1445,7 +1484,7 @@ export function createMockRepository() {
         const clash = data.rentals.find(
           (rental) =>
             rental.car_id === car.id &&
-            (rental.status === 'active' || rental.status === 'overdue') &&
+            isBooked(rental) &&
             toDate(input.pickup_at) < toDate(rental.expected_return_at) &&
             toDate(input.expected_return_at) > toDate(rental.pickup_at),
         )
@@ -1474,17 +1513,21 @@ export function createMockRepository() {
           total_amount: Number(input.total_amount ?? dailyRate * days) || 0,
           deposit_amount: Number(input.deposit_amount) || 0,
           additional_charges: Array.isArray(input.additional_charges) ? clone(input.additional_charges) : [],
-          status: 'active',
+          status: input.advance_booking ? 'booked' : 'active',
           start_mileage: startMileage,
           end_mileage: null,
+          fuel_level: fuel.fuel_level,
+          fuel_bars: fuel.fuel_bars,
           notes: input.notes || '',
           created_at: timestamp,
           updated_at: timestamp,
         }
         data.rentals.push(rental)
         storePhotos(data, rental, 'pickup', pickupPhotos)
-        car.status = 'rented'
-        car.updated_at = timestamp
+        if (!input.advance_booking) {
+          car.status = 'rented'
+          car.updated_at = timestamp
+        }
 
         if (Number(input.amount_paid) > 0) {
           data.payments.push({
@@ -1534,7 +1577,9 @@ export function createMockRepository() {
           const expected = patch.expected_return_at ?? rental.expected_return_at
           rental.days = Math.max(1, daysBetween(pickup, expected))
         }
+        const fuel = patch.fuel_level !== undefined ? normaliseFuel(patch) : null
         Object.assign(rental, patch, { updated_at: new Date().toISOString() })
+        if (fuel) Object.assign(rental, fuel)
         if (patch.daily_rate !== undefined) rental.daily_rate = Number(patch.daily_rate) || 0
         if (patch.expected_km_per_day !== undefined) {
           rental.expected_km_per_day =
@@ -1552,7 +1597,17 @@ export function createMockRepository() {
         }
         const car = data.cars.find((item) => item.id === rental.car_id)
         if (car) {
-          car.status = rental.status === 'active' || rental.status === 'overdue' ? 'rented' : car.status === 'rented' ? 'available' : car.status
+          if (rental.status === 'active' || rental.status === 'overdue') {
+            car.status = 'rented'
+          } else if (rental.status === 'completed' || rental.status === 'cancelled') {
+            const stillRented = data.rentals.some(
+              (item) =>
+                item.id !== rental.id &&
+                item.car_id === car.id &&
+                (item.status === 'active' || item.status === 'overdue'),
+            )
+            if (!stillRented && car.status === 'rented') car.status = 'available'
+          }
           car.updated_at = new Date().toISOString()
         }
 
@@ -2018,7 +2073,7 @@ export function createMockRepository() {
           return pickup >= start && pickup <= addDays(end, 1)
         })
 
-        const byStatus = ['active', 'completed', 'overdue', 'cancelled'].map((status) => ({
+        const byStatus = ['active', 'booked', 'completed', 'overdue', 'cancelled'].map((status) => ({
           status,
           count: rentalsInRange.filter((rental) => (isOverdue(rental) ? 'overdue' : rental.status) === status)
             .length,

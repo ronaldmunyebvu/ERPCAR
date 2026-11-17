@@ -42,6 +42,7 @@ import {
 const STATUS_TABS = [
   { value: 'all', label: 'All' },
   { value: 'active', label: 'Active' },
+  { value: 'booked', label: 'Booked' },
   { value: 'overdue', label: 'Overdue' },
   { value: 'completed', label: 'Completed' },
   { value: 'cancelled', label: 'Cancelled' },

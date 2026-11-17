@@ -21,8 +21,12 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE rental_status AS ENUM ('active', 'completed', 'overdue', 'cancelled');
+  CREATE TYPE rental_status AS ENUM ('active', 'booked', 'completed', 'overdue', 'cancelled');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Advance bookings use the `booked` status so the vehicle stays available
+-- until the rental actually starts.
+ALTER TYPE rental_status ADD VALUE IF NOT EXISTS 'booked';
 
 DO $$ BEGIN
   CREATE TYPE payment_method AS ENUM (
@@ -241,6 +245,9 @@ CREATE TABLE IF NOT EXISTS rentals (
   -- Odometer readings at pickup and return; distance covered is derived.
   start_mileage       int,
   end_mileage         int,
+  -- Fuel at handover. `bars` stores the gauge count in fuel_bars.
+  fuel_level          text        CHECK (fuel_level IN ('full', 'half', 'empty', 'bars')),
+  fuel_bars           int         CHECK (fuel_bars >= 0),
   notes               text,
   created_at          timestamptz NOT NULL DEFAULT now(),
   updated_at          timestamptz NOT NULL DEFAULT now()
@@ -258,6 +265,12 @@ ALTER TABLE rentals ADD COLUMN IF NOT EXISTS start_mileage int;
 ALTER TABLE rentals ADD COLUMN IF NOT EXISTS end_mileage   int;
 ALTER TABLE rentals
   ADD COLUMN IF NOT EXISTS expected_km_per_day int CHECK (expected_km_per_day >= 0);
+
+-- Fuel level recorded at pickup, plus the gauge bar count when the level is
+-- recorded as `bars`.
+ALTER TABLE rentals ADD COLUMN IF NOT EXISTS fuel_level text
+  CHECK (fuel_level IN ('full', 'half', 'empty', 'bars'));
+ALTER TABLE rentals ADD COLUMN IF NOT EXISTS fuel_bars int CHECK (fuel_bars >= 0);
 
 -- AI-assisted handover inspection result. The returned photos are compared with
 -- the pickup photos and the report is stored on the rental so the damage alert

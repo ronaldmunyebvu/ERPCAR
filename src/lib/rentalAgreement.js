@@ -1,4 +1,4 @@
-import { formatDateTime, formatMoney, formatNumber } from '@/lib/utils'
+import { formatDateTime, formatMoney, formatNumber, fuelLevelLabel } from '@/lib/utils'
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -112,6 +112,7 @@ export function buildRentalAgreementHtml(rental, company, currency) {
       ${detailRow('Pickup', formatDateTime(rental.pickup_at))}
       ${detailRow('Expected return', formatDateTime(rental.expected_return_at))}
       ${detailRow('Pickup odometer', rental.start_mileage != null ? `${formatNumber(rental.start_mileage)} km` : 'Not recorded')}
+      ${detailRow('Fuel at pickup', rental.fuel_level ? fuelLevelLabel(rental.fuel_level, rental.fuel_bars) : 'Not recorded')}
       ${detailRow('Mileage allowance', rental.expected_km_per_day != null ? `${formatNumber(rental.expected_km_per_day)} km per day` : 'As agreed')}
     </table>
 

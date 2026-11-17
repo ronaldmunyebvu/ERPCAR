@@ -340,6 +340,23 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
     }
   }
 
+  /**
+   * Validates the fuel level captured at pickup. A bar gauge reading must carry
+   * the number of bars shown, so the count is only kept for that option.
+   */
+  function normaliseFuel(input) {
+    const level = String(input.fuel_level ?? '').trim()
+    if (!['full', 'half', 'empty', 'bars'].includes(level)) {
+      throw new Error('Choose the fuel level at pickup.')
+    }
+    if (level !== 'bars') return { fuel_level: level, fuel_bars: null }
+    const bars = Number(input.fuel_bars)
+    if (!Number.isInteger(bars) || bars < 1) {
+      throw new Error('Enter the number of bars shown on the fuel gauge.')
+    }
+    return { fuel_level: level, fuel_bars: bars }
+  }
+
   return {
     mode: 'neon',
 
@@ -1581,7 +1598,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           .op('r.pickup_at', '<=', to)
 
         if (status === 'overdue') {
-          f.raw(`(r.status IN ('active','overdue') AND r.actual_return_at IS NULL AND r.expected_return_at < now())`)
+          f.raw(`(r.status IN ('active','booked','overdue') AND r.actual_return_at IS NULL AND r.expected_return_at < now())`)
         } else if (status && status !== 'all') {
           f.eq('r.status', status)
         }
@@ -1630,14 +1647,34 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           const existing = await one('SELECT id FROM rentals WHERE id = $1', [input.id])
           if (existing) return this.get(input.id, { companyId: input.company_id })
         }
-        const startMileage = Number(input.start_mileage)
-        if (!Number.isFinite(startMileage) || startMileage < 0) {
+        let startMileage = null
+        if (input.start_mileage !== undefined && input.start_mileage !== null && input.start_mileage !== '') {
+          const parsed = Number(input.start_mileage)
+          if (!Number.isFinite(parsed) || parsed < 0) {
+            throw new Error('Enter the vehicle mileage at pickup.')
+          }
+          startMileage = Math.trunc(parsed)
+        } else if (!input.advance_booking) {
           throw new Error('Enter the vehicle mileage at pickup.')
         }
-        const expectedKmPerDay = Number(input.expected_km_per_day)
-        if (!Number.isFinite(expectedKmPerDay) || expectedKmPerDay <= 0) {
+        let expectedKmPerDay = null
+        if (
+          input.expected_km_per_day !== undefined &&
+          input.expected_km_per_day !== null &&
+          input.expected_km_per_day !== ''
+        ) {
+          const parsed = Number(input.expected_km_per_day)
+          if (!Number.isFinite(parsed) || parsed <= 0) {
+            throw new Error('Enter the expected kilometres per day for this rental.')
+          }
+          expectedKmPerDay = Math.trunc(parsed)
+        } else if (!input.advance_booking) {
           throw new Error('Enter the expected kilometres per day for this rental.')
         }
+        const fuel =
+          input.advance_booking && !input.fuel_level
+            ? { fuel_level: null, fuel_bars: null }
+            : normaliseFuel(input)
         const pickupPhotos = normalisePhotos(input.pickup_photos, 'pickup', true)
         const car = await one('SELECT * FROM cars WHERE id = $1', [input.car_id])
         if (!car) throw new Error('Vehicle not found')
@@ -1647,7 +1684,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (car.status === 'rented') {
           const activeRental = await one(
             `SELECT reference, expected_return_at FROM rentals
-             WHERE car_id = $1 AND status IN ('active','overdue')
+             WHERE car_id = $1 AND status IN ('active','booked','overdue')
                AND $2::timestamptz < expected_return_at
                AND $3::timestamptz > pickup_at
              LIMIT 1`,
@@ -1661,7 +1698,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         }
         const clash = await one(
           `SELECT reference, expected_return_at FROM rentals
-           WHERE car_id = $1 AND status IN ('active','overdue')
+           WHERE car_id = $1 AND status IN ('active','booked','overdue')
              AND $2::timestamptz < expected_return_at
              AND $3::timestamptz > pickup_at
            LIMIT 1`,
@@ -1687,8 +1724,9 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         const rental = await one(
           `INSERT INTO rentals (id, company_id, car_id, customer_id, created_by, reference, pickup_at,
                                 expected_return_at, daily_rate, expected_km_per_day, days, total_amount,
-                                deposit_amount, additional_charges, status, start_mileage, notes)
-           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,'active',$15,$16)
+                                deposit_amount, additional_charges, status, start_mileage, fuel_level,
+                                fuel_bars, notes)
+           VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$19,$15,$16,$17,$18)
            RETURNING *`,
           [
             input.id || null,
@@ -1706,10 +1744,15 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             Number(input.deposit_amount) || 0,
             JSON.stringify(Array.isArray(input.additional_charges) ? input.additional_charges : []),
             startMileage,
+            fuel.fuel_level,
+            fuel.fuel_bars,
             input.notes || null,
+            input.advance_booking ? 'booked' : 'active',
           ],
         )
-        await rows(`UPDATE cars SET status = 'rented', updated_at = now() WHERE id = $1`, [car.id])
+        if (!input.advance_booking) {
+          await rows(`UPDATE cars SET status = 'rented', updated_at = now() WHERE id = $1`, [car.id])
+        }
         await storePhotos(rental.id, rental.company_id, 'pickup', pickupPhotos)
 
         if (Number(input.amount_paid) > 0) {
@@ -1757,6 +1800,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             throw new Error('Enter the expected kilometres per day for this rental.')
           }
         }
+        const fuel = patch.fuel_level !== undefined ? normaliseFuel(patch) : null
 
         const updated = await one(
           `UPDATE rentals SET
@@ -1773,6 +1817,10 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
              notes = COALESCE($12, notes),
              start_mileage = COALESCE($13, start_mileage),
              expected_km_per_day = COALESCE($14, expected_km_per_day),
+             fuel_level = COALESCE($15, fuel_level),
+             fuel_bars = CASE WHEN COALESCE($15, fuel_level) = 'bars'
+                              THEN COALESCE($16, fuel_bars)
+                              ELSE NULL END,
              updated_at = now()
            WHERE id = $1 RETURNING *`,
           [
@@ -1796,6 +1844,8 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             patch.expected_km_per_day !== ''
               ? Number(patch.expected_km_per_day)
               : null,
+            fuel ? fuel.fuel_level : null,
+            fuel ? fuel.fuel_bars : null,
           ],
         )
 
@@ -1809,6 +1859,16 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           await rows(`UPDATE cars SET status = 'rented', updated_at = now() WHERE id = $1`, [
             updated.car_id,
           ])
+        } else if (updated.status === 'completed' || updated.status === 'cancelled') {
+          await rows(
+            `UPDATE cars SET status = 'available', updated_at = now()
+             WHERE id = $1 AND status = 'rented'
+               AND NOT EXISTS (
+                 SELECT 1 FROM rentals
+                 WHERE car_id = $1 AND id <> $2 AND status IN ('active','overdue')
+               )`,
+            [updated.car_id, updated.id],
+          )
         }
 
         await logActivity({
@@ -2207,7 +2267,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             ),
             rows(
               `${RENTAL_SELECT} WHERE r.company_id = $1
-                AND r.status IN ('active','overdue') AND r.actual_return_at IS NULL
+                AND r.status IN ('active','booked','overdue') AND r.actual_return_at IS NULL
                 AND r.expected_return_at < now()
                 ORDER BY r.expected_return_at`,
               [companyId],
@@ -2348,7 +2408,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
 
         const statusRows = await rows(
           `SELECT status,
-                  (status IN ('active','overdue') AND actual_return_at IS NULL
+                  (status IN ('active','booked','overdue') AND actual_return_at IS NULL
                     AND expected_return_at < now()) AS derived_overdue,
                   count(*)::int AS count
            FROM rentals
@@ -2377,7 +2437,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             average_rental_value: num(totalsRow.avg_value),
             outstanding: num(totalsRow.outstanding),
           },
-          by_status: ['active', 'completed', 'overdue', 'cancelled'].map((status) => ({
+          by_status: ['active', 'booked', 'completed', 'overdue', 'cancelled'].map((status) => ({
             status,
             count: statusRows
               .filter((row) => (row.derived_overdue ? 'overdue' : row.status) === status)

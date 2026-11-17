@@ -174,11 +174,34 @@ export function relativeTime(value) {
 
 /* ------------------------------------------------------- domain helpers */
 
-export const RENTAL_STATUSES = ['active', 'completed', 'overdue', 'cancelled']
+export const RENTAL_STATUSES = ['active', 'booked', 'completed', 'overdue', 'cancelled']
 export const CAR_STATUSES = ['available', 'rented', 'maintenance', 'inactive']
 export const USER_ROLES = ['admin', 'member']
 export const USER_STATUSES = ['active', 'inactive']
 export const FLEET_OWNERSHIP = ['owned', 'sub_lease']
+
+/** Fuel shown on the gauge at handover. `bars` records the count separately. */
+export const FUEL_LEVELS = [
+  { value: 'full', label: 'Full tank' },
+  { value: 'half', label: 'Half tank' },
+  { value: 'empty', label: 'Empty' },
+  { value: 'bars', label: 'Bars on gauge' },
+]
+
+/** Human-readable fuel level, including the bar count when one was recorded. */
+export function fuelLevelLabel(level, bars) {
+  if (level === 'full') return 'Full tank'
+  if (level === 'half') return 'Half tank'
+  if (level === 'empty') return 'Empty'
+  if (level === 'bars') {
+    const count = Number(bars)
+    if (Number.isFinite(count) && count > 0) {
+      return `${formatNumber(count)} bar${count === 1 ? '' : 's'}`
+    }
+    return 'Bars on gauge'
+  }
+  return 'Not recorded'
+}
 
 /** Licences at or past this many days left surface on the dashboard. */
 export const LICENSE_WARNING_DAYS = 5

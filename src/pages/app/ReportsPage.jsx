@@ -53,6 +53,7 @@ const PAYMENT_COLORS = {
 
 const STATUS_COLORS = {
   active: 'var(--color-brand-500)',
+  booked: 'var(--color-sky-500)',
   completed: 'var(--color-emerald-500)',
   overdue: 'var(--color-red-500)',
   cancelled: 'var(--color-ink-300)',

@@ -1,9 +1,10 @@
 import { cn, formatMoney, titleCase } from '@/lib/utils'
 import { Badge } from '@/components/ui'
-import { AlertTriangle, CalendarClock, CheckCircle2, Ban, Wrench, CircleParking, CircleOff, Crown, User } from 'lucide-react'
+import { AlertTriangle, CalendarCheck, CalendarClock, CheckCircle2, Ban, Wrench, CircleParking, CircleOff, Crown, User } from 'lucide-react'
 
 const RENTAL_TONES = {
   active: { tone: 'brand', label: 'Active', icon: CalendarClock },
+  booked: { tone: 'info', label: 'Booked', icon: CalendarCheck },
   completed: { tone: 'success', label: 'Completed', icon: CheckCircle2 },
   overdue: { tone: 'danger', label: 'Overdue', icon: AlertTriangle },
   cancelled: { tone: 'neutral', label: 'Cancelled', icon: Ban },

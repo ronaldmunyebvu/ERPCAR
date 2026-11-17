@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Ban,
+  CalendarCheck,
   Camera,
   Car,
   CheckCircle2,
@@ -60,6 +61,7 @@ import {
   toDateTimeInput,
   toDate,
   PAYMENT_METHODS,
+  fuelLevelLabel,
   titleCase,
 } from '@/lib/utils'
 import { downloadRentalAgreement, printRentalAgreement } from '@/lib/rentalAgreement'
@@ -123,6 +125,20 @@ export default function RentalDetailPage() {
 
   const canEdit = isAdmin || (company?.members_edit_own_rentals && data?.created_by === user?.id)
   const open = data && (data.status === 'active' || data.computed_status === 'overdue')
+  const isBooked = data?.status === 'booked'
+
+  const startRental = async () => {
+    setBusy(true)
+    try {
+      await repository.rentals.update(id, { status: 'active' }, user)
+      toast.success('Rental started. Record the odometer and fuel if you have not already.')
+      rental.reload()
+    } catch (cause) {
+      toast.error(cause.message)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     if (searchParams.get('action') === 'return' && data && !open) {
@@ -188,6 +204,12 @@ export default function RentalDetailPage() {
                 Edit
               </Button>
             )}
+            {isBooked && canEdit && (
+              <Button onClick={startRental} loading={busy}>
+                <CalendarCheck size={15} />
+                Start rental
+              </Button>
+            )}
             {open && canEdit && (
               <Button onClick={() => setReturnOpen(true)}>
                 <CheckCircle2 size={15} />
@@ -218,6 +240,14 @@ export default function RentalDetailPage() {
           </div>
         </div>
       </Card>
+
+      {isBooked && (
+        <Alert tone="info" icon={CalendarCheck} title="Advance booking" className="mb-4">
+          This vehicle is reserved from {formatDateTime(data.pickup_at)} to{' '}
+          {formatDateTime(data.expected_return_at)}. It stays available until you start the rental,
+          and any payment recorded now counts towards the balance.
+        </Alert>
+      )}
 
       {data.computed_status === 'overdue' && (
         <Alert
@@ -270,6 +300,12 @@ export default function RentalDetailPage() {
                 <Detail
                   label="Odometer at pickup"
                   value={`${formatNumber(data.start_mileage)} km`}
+                />
+              )}
+              {data.fuel_level && (
+                <Detail
+                  label="Fuel at pickup"
+                  value={fuelLevelLabel(data.fuel_level, data.fuel_bars)}
                 />
               )}
               {data.start_mileage != null && data.end_mileage != null && (
