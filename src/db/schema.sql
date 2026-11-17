@@ -204,6 +204,20 @@ DO $$ BEGIN
     CHECK (company_share_percent BETWEEN 0 AND 100);
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+-- ------------------------------------------------------- scheduled servicing
+-- Captured with the vehicle: how many days from capture until the next
+-- service. `maintenance_due_on` is the resulting calendar date, and
+-- `maintenance_reminder_for` records which due date has already been emailed
+-- so a daily reminder job never sends the same message twice.
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS maintenance_interval_days int
+  CHECK (maintenance_interval_days >= 0);
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS maintenance_due_on date;
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS maintenance_reminder_for date;
+
+-- The licence expiry date already emailed about, so renewal reminders are
+-- sent once per term rather than every day inside the warning window.
+ALTER TABLE cars ADD COLUMN IF NOT EXISTS license_reminder_for date;
+
 -- --------------------------------------------------------------- customers
 CREATE TABLE IF NOT EXISTS customers (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),

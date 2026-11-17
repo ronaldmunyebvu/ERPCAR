@@ -28,9 +28,11 @@ import {
   titleCase,
   downloadCsv,
   toDateInput,
+  addDays,
   CAR_STATUSES,
   currencySymbol,
   FLEET_OWNERSHIP,
+  LICENSE_WARNING_DAYS,
   licenseState,
   ownerFullName,
   ownershipLabel,
@@ -59,6 +61,7 @@ const EMPTY_CAR = {
   category: 'sedan',
   daily_rate: '',
   daily_mileage_limit: '',
+  maintenance_interval_days: '',
   status: 'available',
   photo_url: '',
   notes: '',
@@ -112,6 +115,10 @@ export default function FleetPage() {
         year: Number(values.year),
         daily_rate: Number(values.daily_rate) || 0,
         daily_mileage_limit: Number(values.daily_mileage_limit) || 0,
+        maintenance_interval_days:
+          values.maintenance_interval_days === '' || values.maintenance_interval_days == null
+            ? null
+            : Number(values.maintenance_interval_days),
       }
       if (editing?.id) {
         await repository.cars.update(editing.id, payload, user)
@@ -182,6 +189,7 @@ export default function FleetPage() {
       { label: 'Status', value: (row) => row.status },
       { label: 'Licence from', value: (row) => row.license_valid_from || '' },
       { label: 'Licence to', value: (row) => row.license_valid_to || '' },
+      { label: 'Maintenance due', value: (row) => row.maintenance_due_on || '' },
       { label: 'Current rental', value: (row) => row.current_rental?.reference || '' },
       { label: 'Notes', value: (row) => row.notes || '' },
     ], rows)
@@ -292,6 +300,11 @@ export default function FleetPage() {
                     <div className="text-xs text-ink-400">
                       {car.year} · {car.color || 'Colour n/a'}
                     </div>
+                    {car.maintenance_due_on && (
+                      <div className="text-xs text-ink-400">
+                        Service {formatDate(car.maintenance_due_on)}
+                      </div>
+                    )}
                   </td>
                   <td className="font-mono text-xs">{car.registration}</td>
                   <td>{titleCase(car.category)}</td>
@@ -438,6 +451,15 @@ function CarFormModal({ open, car, currency, busy, onClose, onSubmit }) {
     if (!values.registration?.trim()) found.registration = 'Registration is required.'
     if (!values.year || values.year < 1980) found.year = 'Enter a valid year.'
     if (!(Number(values.daily_rate) > 0)) found.daily_rate = 'Set a daily rate above zero.'
+    const maintenanceEntered =
+      values.maintenance_interval_days !== '' && values.maintenance_interval_days != null
+    if (!maintenanceEntered) {
+      if (!car?.id) {
+        found.maintenance_interval_days = 'Enter how many days until the next maintenance.'
+      }
+    } else if (!(Number(values.maintenance_interval_days) >= 1)) {
+      found.maintenance_interval_days = 'Enter at least 1 day.'
+    }
     if (values.ownership === 'sub_lease') {
       if (!values.owner_first_name?.trim()) found.owner_first_name = 'Owner first name is required.'
       if (!values.owner_last_name?.trim()) found.owner_last_name = 'Owner surname is required.'
@@ -545,6 +567,28 @@ function CarFormModal({ open, car, currency, busy, onClose, onSubmit }) {
             value={values.daily_mileage_limit ?? ''}
             onChange={set('daily_mileage_limit')}
             placeholder="e.g. 700"
+          />
+        </Field>
+        <Field
+          label="Days until next maintenance"
+          required={!car?.id}
+          error={errors.maintenance_interval_days}
+          hint={
+            car?.maintenance_due_on
+              ? `Currently due ${formatDate(car.maintenance_due_on)}. Change this number to restart the countdown from today.`
+              : Number(values.maintenance_interval_days) >= 1
+                ? `Due ${formatDate(addDays(new Date(), Number(values.maintenance_interval_days)))}. The admin is emailed ${LICENSE_WARNING_DAYS} days before.`
+                : `How many days from today until the next service. The admin is emailed ${LICENSE_WARNING_DAYS} days before the due date.`
+          }
+        >
+          <Input
+            type="number"
+            min="1"
+            step="1"
+            value={values.maintenance_interval_days ?? ''}
+            onChange={set('maintenance_interval_days')}
+            placeholder="e.g. 90"
+            invalid={Boolean(errors.maintenance_interval_days)}
           />
         </Field>
         <Field label="Status" hint="Only available vehicles can be booked.">

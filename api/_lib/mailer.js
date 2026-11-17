@@ -233,6 +233,118 @@ export async function sendCompanySetupMail({ to, name, company, code }) {
   }
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function formatDay(value) {
+  if (!value) return 'unknown date'
+  const text = String(value)
+  const date = new Date(/^\d{4}-\d{2}-\d{2}$/.test(text) ? `${text}T00:00:00Z` : text)
+  if (Number.isNaN(date.getTime())) return text
+  return date.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
+}
+
+function licencePhrase(days) {
+  const count = Number(days)
+  if (!Number.isFinite(count)) return 'expiry soon'
+  if (count < 0) {
+    return `expired ${Math.abs(count)} day${Math.abs(count) === 1 ? '' : 's'} ago`
+  }
+  if (count === 0) return 'expires today'
+  return `${count} day${count === 1 ? '' : 's'} left`
+}
+
+function duePhrase(days) {
+  const count = Number(days)
+  if (!Number.isFinite(count)) return 'due soon'
+  if (count < 0) return `overdue by ${Math.abs(count)} day${Math.abs(count) === 1 ? '' : 's'}`
+  if (count === 0) return 'due today'
+  return `due in ${count} day${count === 1 ? '' : 's'}`
+}
+
+/**
+ * Daily fleet reminder. One message per company lists every vehicle whose
+ * Zinara licence or scheduled service is inside the five-day warning window.
+ * The caller only invokes this after confirming the company has an admin email.
+ */
+export async function sendFleetReminderMail({ to, company, licenses = [], maintenance = [] }) {
+  const send = transporter()
+  if (!send) return false
+  const recipients = (Array.isArray(to) ? to : [to]).filter(Boolean)
+  if (!recipients.length) return false
+
+  const kinds = []
+  if (licenses.length) kinds.push('licence')
+  if (maintenance.length) kinds.push('maintenance')
+  const subject = `Action needed: ${kinds.join(' and ')} reminder — ${company}`
+
+  const licenceLines = licenses.map(
+    (car) =>
+      `${car.registration} — ${car.make} ${car.model}: licence expires ${formatDay(car.license_valid_to)} (${licencePhrase(car.license_days_left)})`,
+  )
+  const maintenanceLines = maintenance.map(
+    (car) =>
+      `${car.registration} — ${car.make} ${car.model}: service ${formatDay(car.maintenance_due_on)} (${duePhrase(car.maintenance_days_left)})`,
+  )
+
+  const section = (title, lines) =>
+    lines.length
+      ? `<h2 style="margin:18px 0 8px;font-size:15px;">${title}</h2>
+         <ul style="margin:0;padding-left:20px;">
+           ${lines
+             .map((line) => `<li style="margin:0 0 6px;">${escapeHtml(line)}</li>`)
+             .join('')}
+         </ul>`
+      : ''
+
+  try {
+    await send.sendMail({
+      from: `"VNexus 360" <${process.env.MAIL_USER}>`,
+      to: recipients.join(', '),
+      subject,
+      text: [
+        `Hello ${company},`,
+        '',
+        'The following vehicles need attention:',
+        '',
+        ...(licenceLines.length ? ['LICENCES', ...licenceLines.map((line) => `- ${line}`), ''] : []),
+        ...(maintenanceLines.length
+          ? ['MAINTENANCE', ...maintenanceLines.map((line) => `- ${line}`), '']
+          : []),
+        `Open the fleet page: ${appOrigin()}/app/fleet`,
+        '',
+        'This reminder is sent once per due date. Update the vehicle record after renewing or servicing it.',
+      ].join('\n'),
+      html: layout({
+        preheader: `${kinds.join(' and ')} reminders for ${licenses.length + maintenance.length} vehicle(s).`,
+        heading: 'Fleet reminders',
+        body: `<p style="margin:0 0 12px;">Hello <strong>${escapeHtml(company)}</strong>,</p>
+               <p style="margin:0;">The following vehicles need attention:</p>
+               ${section('Licences', licenceLines)}
+               ${section('Scheduled maintenance', maintenanceLines)}`,
+        action: { href: `${appOrigin()}/app/fleet`, label: 'Open fleet' },
+        note: 'This reminder is sent once per due date.',
+        footer:
+          'Update the vehicle record after renewing the licence or completing the service so the next reminder is scheduled correctly.',
+      }),
+    })
+    return true
+  } catch (error) {
+    console.error('[mail] fleet reminder email failed', error?.message)
+    return false
+  }
+}
+
 /** Handle passed to the Neon repository. A missing handle simply means no mail. */
 export const mail = {
   enabled: mailEnabled,
@@ -240,4 +352,5 @@ export const mail = {
   resetCode: sendResetCodeMail,
   memberSetupCode: sendMemberSetupMail,
   companySetupCode: sendCompanySetupMail,
+  fleetReminder: sendFleetReminderMail,
 }

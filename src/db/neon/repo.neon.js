@@ -147,25 +147,31 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
     return found[0] ?? null
   }
 
-  // Databases created before fuel capture and advance bookings were added are
-  // missing the enum value and columns. Applying the additive changes lazily
-  // keeps existing installations working without a manual migration; every
-  // statement is idempotent, so this is a no-op once the schema is current.
-  let rentalSchemaReady = null
-  function ensureRentalSchema() {
-    if (!rentalSchemaReady) {
-      rentalSchemaReady = (async () => {
+  // Databases created before fuel capture, advance bookings and servicing
+  // reminders were added are missing the enum value and columns. Applying the
+  // additive changes lazily keeps existing installations working without a
+  // manual migration; every statement is idempotent, so once the schema is
+  // current this costs nothing after the first call on each instance.
+  let schemaReady = null
+  function ensureSchema() {
+    if (!schemaReady) {
+      schemaReady = (async () => {
         await rows(`ALTER TYPE rental_status ADD VALUE IF NOT EXISTS 'booked'`)
         await rows(`ALTER TABLE rentals ADD COLUMN IF NOT EXISTS fuel_level text
                     CHECK (fuel_level IN ('full', 'half', 'empty', 'bars'))`)
         await rows(`ALTER TABLE rentals ADD COLUMN IF NOT EXISTS fuel_bars int
                     CHECK (fuel_bars >= 0)`)
+        await rows(`ALTER TABLE cars ADD COLUMN IF NOT EXISTS maintenance_interval_days int
+                    CHECK (maintenance_interval_days >= 0)`)
+        await rows(`ALTER TABLE cars ADD COLUMN IF NOT EXISTS maintenance_due_on date`)
+        await rows(`ALTER TABLE cars ADD COLUMN IF NOT EXISTS maintenance_reminder_for date`)
+        await rows(`ALTER TABLE cars ADD COLUMN IF NOT EXISTS license_reminder_for date`)
       })().catch((error) => {
-        rentalSchemaReady = null
+        schemaReady = null
         throw error
       })
     }
-    return rentalSchemaReady
+    return schemaReady
   }
 
   async function logActivity(entry) {
@@ -358,7 +364,18 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
       license_valid_from: car.license_valid_from || null,
       license_valid_to: car.license_valid_to || null,
       license_renewed_at: car.license_renewed_at || null,
+      license_reminder_for: car.license_reminder_for || null,
+      maintenance_interval_days: car.maintenance_interval_days ?? null,
+      maintenance_due_on: car.maintenance_due_on || null,
+      maintenance_reminder_for: car.maintenance_reminder_for || null,
     }
+  }
+
+  /** Positive whole days, or null when the interval was cleared. */
+  function normaliseIntervalDays(value) {
+    if (value === null || value === undefined || value === '') return null
+    const parsed = Number(value)
+    return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : null
   }
 
   /**
@@ -1257,6 +1274,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
       },
 
       async create(input, actor) {
+        await ensureSchema()
         if (input.id) {
           const existing = await one('SELECT * FROM cars WHERE id = $1', [input.id])
           if (existing) return shapeCar(existing)
@@ -1268,13 +1286,17 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         )
         if (clash) throw new Error(`Registration ${registration} already exists in the fleet.`)
         const subLease = input.ownership === 'sub_lease'
+        const maintenanceDays = normaliseIntervalDays(input.maintenance_interval_days)
         const car = await one(
           `INSERT INTO cars (id, company_id, make, model, year, registration, color, category,
                              daily_rate, daily_mileage_limit, status, photo_url, notes,
                              ownership, owner_first_name, owner_last_name, company_share_percent,
-                             license_valid_from, license_valid_to)
+                             license_valid_from, license_valid_to,
+                             maintenance_interval_days, maintenance_due_on)
            VALUES (COALESCE($1::uuid, gen_random_uuid()),$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
-                   $14,$15,$16,$17,$18::date,$19::date) RETURNING *`,
+                   $14,$15,$16,$17,$18::date,$19::date,$20::int,
+                   CASE WHEN $20::int IS NULL THEN NULL ELSE current_date + $20::int END)
+           RETURNING *`,
           [
             input.id || null,
             input.company_id,
@@ -1295,6 +1317,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             subLease ? sharePercent(input.company_share_percent) : 100,
             input.license_valid_from || null,
             input.license_valid_to || null,
+            maintenanceDays,
           ],
         )
         await logActivity({
@@ -1315,6 +1338,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
       },
 
       async update(id, patch, actor) {
+        await ensureSchema()
         const previous = await one('SELECT * FROM cars WHERE id = $1', [id])
         if (!previous) throw new Error('Vehicle not found')
         if (patch.registration) {
@@ -1351,6 +1375,12 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           patch.license_valid_to === undefined
             ? previous.license_valid_to || null
             : patch.license_valid_to || null
+        // Passing the existing value when the field was omitted keeps the
+        // scheduled date; only a changed interval restarts the countdown.
+        const maintenanceDays =
+          patch.maintenance_interval_days === undefined
+            ? normaliseIntervalDays(previous.maintenance_interval_days)
+            : normaliseIntervalDays(patch.maintenance_interval_days)
 
         const car = await one(
           `UPDATE cars SET
@@ -1371,6 +1401,15 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
              company_share_percent = $16,
              license_valid_from = $17::date,
              license_valid_to = $18::date,
+             license_reminder_for = CASE WHEN license_valid_to IS DISTINCT FROM $18::date
+                                         THEN NULL ELSE license_reminder_for END,
+             maintenance_interval_days = $19::int,
+             maintenance_due_on = CASE WHEN maintenance_interval_days IS DISTINCT FROM $19::int
+                                       THEN CASE WHEN $19::int IS NULL THEN NULL
+                                                 ELSE current_date + $19::int END
+                                       ELSE maintenance_due_on END,
+             maintenance_reminder_for = CASE WHEN maintenance_interval_days IS DISTINCT FROM $19::int
+                                             THEN NULL ELSE maintenance_reminder_for END,
              updated_at = now()
            WHERE id = $1 RETURNING *`,
           [
@@ -1392,6 +1431,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             share,
             validFrom,
             validTo,
+            maintenanceDays,
           ],
         )
         await logActivity({
@@ -1450,6 +1490,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
        * build and in Neon (the function host's clock is UTC).
        */
       async renewLicense(id, onDate, actor) {
+        await ensureSchema()
         const car = await one('SELECT * FROM cars WHERE id = $1', [id])
         if (!car) throw new Error('Vehicle not found')
         const start = /^\d{4}-\d{2}-\d{2}$/.test(String(onDate || '')) ? onDate : null
@@ -1457,6 +1498,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           `UPDATE cars
               SET license_valid_from = COALESCE($2::date, current_date),
                   license_valid_to = COALESCE($2::date, current_date) + $3::int * interval '1 day',
+                  license_reminder_for = NULL,
                   license_renewed_at = now(),
                   updated_at = now()
             WHERE id = $1
@@ -1742,7 +1784,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         const reference =
           input.reference || `RNT-${year}-${String(num(highest?.value) + 1).padStart(4, '0')}`
 
-        await ensureRentalSchema()
+        await ensureSchema()
         const rental = await one(
           `INSERT INTO rentals (id, company_id, car_id, customer_id, created_by, reference, pickup_at,
                                 expected_return_at, daily_rate, expected_km_per_day, days, total_amount,
@@ -1808,7 +1850,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
       },
 
       async update(id, patch, actor) {
-        await ensureRentalSchema()
+        await ensureSchema()
         const current = await one('SELECT * FROM rentals WHERE id = $1', [id])
         if (!current) throw new Error('Rental not found')
         const pickup = patch.pickup_at ?? current.pickup_at

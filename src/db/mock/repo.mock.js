@@ -178,6 +178,10 @@ function publicCar(car) {
     license_valid_from: null,
     license_valid_to: null,
     license_renewed_at: null,
+    license_reminder_for: null,
+    maintenance_interval_days: null,
+    maintenance_due_on: null,
+    maintenance_reminder_for: null,
     mileage: 0,
     daily_mileage_limit: 0,
     ...clone(car),
@@ -222,6 +226,26 @@ function applyLicenseDates(target, input) {
   if (input.license_valid_to !== undefined) {
     target.license_valid_to = input.license_valid_to || null
   }
+}
+
+/**
+ * Restarts the servicing countdown when the interval changes. The days are
+ * counted from today, so a changed value schedules the next service afresh;
+ * an unchanged value leaves the existing due date and reminder marker alone.
+ */
+function normaliseInterval(value) {
+  if (value === null || value === undefined || value === '') return null
+  return Number(value) > 0 ? Math.trunc(Number(value)) : null
+}
+
+function applyMaintenanceSchedule(target, input, previous = null) {
+  if (input.maintenance_interval_days === undefined) return
+  const next = normaliseInterval(input.maintenance_interval_days)
+  const current = normaliseInterval(previous)
+  target.maintenance_interval_days = next
+  if (next === current) return
+  target.maintenance_due_on = next ? toDateInput(addDays(new Date(), next)) : null
+  target.maintenance_reminder_for = null
 }
 
 /**
@@ -1122,11 +1146,16 @@ export function createMockRepository() {
           license_valid_from: null,
           license_valid_to: null,
           license_renewed_at: null,
+          license_reminder_for: null,
+          maintenance_interval_days: null,
+          maintenance_due_on: null,
+          maintenance_reminder_for: null,
           created_at: timestamp,
           updated_at: timestamp,
         }
         applyOwnershipFields(car, input)
         applyLicenseDates(car, input)
+        applyMaintenanceSchedule(car, input)
         data.cars.push(car)
         logActivity(data, {
           company_id: input.company_id,
@@ -1150,9 +1179,13 @@ export function createMockRepository() {
         const data = await db()
         const car = assertFound(data.cars.find((item) => item.id === id), 'Vehicle')
         const previousStatus = car.status
+        const previousLicenseTo = car.license_valid_to
+        const previousMaintenanceDays = car.maintenance_interval_days
         Object.assign(car, patch, { updated_at: new Date().toISOString() })
         applyOwnershipFields(car, patch)
         applyLicenseDates(car, patch)
+        applyMaintenanceSchedule(car, patch, previousMaintenanceDays)
+        if (car.license_valid_to !== previousLicenseTo) car.license_reminder_for = null
         if (patch.registration) car.registration = String(patch.registration).trim().toUpperCase()
         if (patch.daily_rate !== undefined) car.daily_rate = Number(patch.daily_rate) || 0
         if (patch.daily_mileage_limit !== undefined) {
@@ -1229,6 +1262,7 @@ export function createMockRepository() {
         car.license_valid_from = toDateInput(today)
         car.license_valid_to = toDateInput(addDays(today, LICENSE_RENEWAL_DAYS))
         car.license_renewed_at = new Date().toISOString()
+        car.license_reminder_for = null
         car.updated_at = car.license_renewed_at
         logActivity(data, {
           company_id: car.company_id,
