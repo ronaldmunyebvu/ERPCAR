@@ -82,7 +82,7 @@ export default function RentalDetailPage() {
 
   const [agreementOpen, setAgreementOpen] = useState(Boolean(location.state?.agreement))
   const [returnOpen, setReturnOpen] = useState(searchParams.get('action') === 'return')
-  const [paymentOpen, setPaymentOpen] = useState(false)
+  const [paymentOpen, setPaymentOpen] = useState(searchParams.get('action') === 'payment')
   const [cancelOpen, setCancelOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -166,6 +166,13 @@ export default function RentalDetailPage() {
   const closeReturnModal = () => {
     setReturnOpen(false)
     setSearchParams(new URLSearchParams(), { replace: true })
+  }
+
+  const closePaymentModal = () => {
+    setPaymentOpen(false)
+    if (searchParams.get('action') === 'payment') {
+      setSearchParams(new URLSearchParams(), { replace: true })
+    }
   }
 
   const confirmDelete = async () => {
@@ -446,12 +453,17 @@ export default function RentalDetailPage() {
                 />
               </dl>
 
-              <div className="mt-5 flex flex-wrap gap-2">
-                {!open && (
-                  <Button variant="secondary" size="sm" onClick={() => setPaymentOpen(true)}>
-                    <Wallet size={14} />
-                    Record payment
-                  </Button>
+              <div className="mt-5 flex flex-wrap items-center gap-2">
+                {data.computed_balance > 0 && data.status !== 'cancelled' && (
+                  <>
+                    <Button variant="primary" size="sm" onClick={() => setPaymentOpen(true)}>
+                      <Wallet size={14} />
+                      Record payment
+                    </Button>
+                    <span className="text-xs text-ink-400">
+                      The amount is pre-filled with the balance — save it to mark the rental settled.
+                    </span>
+                  </>
                 )}
               </div>
             </div>
@@ -609,13 +621,13 @@ export default function RentalDetailPage() {
 
       <PaymentModal
         open={paymentOpen}
-        onClose={() => setPaymentOpen(false)}
+        onClose={closePaymentModal}
         rental={data}
         currency={currency}
         onSubmit={async (payload) => {
           await repository.payments.create({ company_id: companyId, rental_id: id, ...payload }, user)
           toast.success('Payment recorded.')
-          setPaymentOpen(false)
+          closePaymentModal()
           rental.reload()
         }}
       />
@@ -1375,7 +1387,11 @@ function PaymentModal({ open, onClose, rental, currency, onSubmit }) {
     >
       <form onSubmit={submit} className="space-y-4">
         {error && <Alert tone="danger" icon={AlertTriangle}>{error}</Alert>}
-        <Field label="Amount" required>
+        <Field
+          label="Amount"
+          required
+          hint="Pre-filled with the outstanding balance. Save as-is to settle the rental, or lower it for a part-payment."
+        >
           <Input
             type="number"
             min="0.01"

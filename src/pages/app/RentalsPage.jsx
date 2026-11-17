@@ -333,9 +333,19 @@ export default function RentalsPage() {
                     </td>
                     <td className="text-right tabular-nums">
                       {rental.computed_balance > 0 ? (
-                        <span className="font-semibold text-red-600">
-                          {money(rental.computed_balance)}
-                        </span>
+                        <>
+                          <span className="font-semibold text-red-600">
+                            {money(rental.computed_balance)}
+                          </span>
+                          {rental.status !== 'cancelled' && (
+                            <Link
+                              to={`/app/rentals/${rental.id}?action=payment`}
+                              className="mt-1 block text-xs text-brand-600 hover:underline"
+                            >
+                              Record payment
+                            </Link>
+                          )}
+                        </>
                       ) : (
                         <span className="text-emerald-600">Settled</span>
                       )}
