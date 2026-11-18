@@ -8,6 +8,7 @@ import {
   isOverdue,
   rentalTotal,
   rentalBalance,
+  extensionQuote,
   excessMileageInfo,
   excessMileageCharge,
   matchesSearch,
@@ -1737,6 +1738,51 @@ export function createMockRepository() {
             excessMileageCharge: mileageCharge?.amount ?? 0,
             damageDetected: Boolean(damage_report?.damage_detected),
             damageConfidence: damage_report?.confidence ?? 0,
+          },
+        })
+        commit()
+        return hydrateRental(data, rental)
+      },
+
+      /**
+       * Pushes the due date out for a vehicle that is still with the customer.
+       * Payments are deliberately left alone: the recalculated base fee minus
+       * what was already paid becomes the new outstanding balance.
+       */
+      async extend(id, { expected_return_at }, actor) {
+        const data = await db()
+        const rental = assertFound(data.rentals.find((item) => item.id === id), 'Rental')
+        if (rental.actual_return_at || !['active', 'overdue'].includes(rental.status)) {
+          throw new Error('The rental must still be open to extend it.')
+        }
+
+        const quote = extensionQuote(rental, expected_return_at)
+        if (!quote) throw new Error('The new return date must be after the current due date.')
+
+        const previousDue = rental.expected_return_at
+        rental.expected_return_at = expected_return_at
+        rental.days = quote.totalDays
+        rental.total_amount = quote.newBase
+        rental.status = 'active'
+        const summary = `Extended to ${String(expected_return_at).slice(0, 10)} (+${
+          quote.extraDays
+        } day${quote.extraDays === 1 ? '' : 's'}, +${quote.extensionFee}).`
+        rental.notes = summary + (rental.notes ? `\n${rental.notes}` : '')
+        rental.updated_at = new Date().toISOString()
+
+        logActivity(data, {
+          company_id: rental.company_id,
+          user_id: actor?.id || null,
+          action: 'rental.extended',
+          entity: 'rental',
+          entity_id: id,
+          summary: `Extended rental ${rental.reference} ${summary}`,
+          metadata: {
+            reference: rental.reference,
+            previous_due: previousDue,
+            expected_return_at,
+            extra_days: quote.extraDays,
+            amount: quote.extensionFee,
           },
         })
         commit()

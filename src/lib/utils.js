@@ -297,6 +297,44 @@ export function rentalBalance(rental) {
   return Math.max(0, rentalTotal(rental) - paid)
 }
 
+/**
+ * Quotes an extension without changing the rental.
+ *
+ * The extension is billed by extending the base rental fee, not by adding a
+ * second line charge: the existing `total_amount` already covers the original
+ * days, so the difference is exactly the extra days at the daily rate. Other
+ * charges and every payment already recorded are left in place, which means the
+ * new balance is simply the new total minus what the customer has already paid.
+ */
+export function extensionQuote(rental, expectedReturnAt) {
+  const due = toDate(rental?.expected_return_at)
+  const next = toDate(expectedReturnAt)
+  if (!due || !next || next.getTime() <= due.getTime() || next.getTime() <= Date.now()) return null
+
+  const extraDays = daysBetween(due, next)
+  const totalDays = Math.max(1, daysBetween(rental.pickup_at, next))
+  const rate = Math.max(0, Number(rental?.daily_rate) || 0)
+  const round = (value) => Math.round(value * 100) / 100
+  const newBase = round(rate * totalDays)
+  const otherCharges = (rental?.additional_charges || []).reduce(
+    (sum, charge) => sum + (Number(charge.amount) || 0),
+    0,
+  )
+  const paid = Number(rental?.computed_paid) || 0
+  const newTotal = round(newBase + otherCharges)
+
+  return {
+    extraDays,
+    totalDays,
+    extensionFee: Math.max(0, round(newBase - (Number(rental?.total_amount) || 0))),
+    otherCharges: round(otherCharges),
+    newBase,
+    newTotal,
+    paid,
+    newBalance: Math.max(0, round(newTotal - paid)),
+  }
+}
+
 export function matchesSearch(haystack, term) {
   if (!term) return true
   return String(haystack ?? '')

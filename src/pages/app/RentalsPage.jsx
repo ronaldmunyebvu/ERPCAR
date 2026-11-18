@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
+  CalendarPlus,
   CalendarRange,
   Download,
   Filter,
@@ -366,6 +367,16 @@ export default function RentalsPage() {
                           <Link to={`/app/rentals/${rental.id}/edit`} title="Edit">
                             <Button variant="ghost" size="icon">
                               <Pencil size={15} />
+                            </Button>
+                          </Link>
+                        )}
+                        {open && canEdit && (
+                          <Link
+                            to={`/app/rentals/${rental.id}?action=extend`}
+                            title="Extend rental"
+                          >
+                            <Button variant="ghost" size="icon">
+                              <CalendarPlus size={15} />
                             </Button>
                           </Link>
                         )}

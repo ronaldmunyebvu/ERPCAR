@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   Ban,
   CalendarCheck,
+  CalendarPlus,
   Camera,
   Car,
   CheckCircle2,
@@ -57,8 +58,11 @@ import {
   daysBetween,
   excessMileageInfo,
   excessMileageCharge,
+  extensionQuote,
   currencySymbol,
+  addDays,
   toDateTimeInput,
+  toDateInput,
   toDate,
   PAYMENT_METHODS,
   fuelLevelLabel,
@@ -82,6 +86,7 @@ export default function RentalDetailPage() {
 
   const [agreementOpen, setAgreementOpen] = useState(Boolean(location.state?.agreement))
   const [returnOpen, setReturnOpen] = useState(searchParams.get('action') === 'return')
+  const [extendOpen, setExtendOpen] = useState(searchParams.get('action') === 'extend')
   const [paymentOpen, setPaymentOpen] = useState(searchParams.get('action') === 'payment')
   const [cancelOpen, setCancelOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -141,7 +146,8 @@ export default function RentalDetailPage() {
   }
 
   useEffect(() => {
-    if (searchParams.get('action') === 'return' && data && !open) {
+    const action = searchParams.get('action')
+    if ((action === 'return' || action === 'extend') && data && !open) {
       setSearchParams(new URLSearchParams(), { replace: true })
     }
   }, [data, open, searchParams, setSearchParams])
@@ -166,6 +172,13 @@ export default function RentalDetailPage() {
   const closeReturnModal = () => {
     setReturnOpen(false)
     setSearchParams(new URLSearchParams(), { replace: true })
+  }
+
+  const closeExtendModal = () => {
+    setExtendOpen(false)
+    if (searchParams.get('action') === 'extend') {
+      setSearchParams(new URLSearchParams(), { replace: true })
+    }
   }
 
   const closePaymentModal = () => {
@@ -218,10 +231,16 @@ export default function RentalDetailPage() {
               </Button>
             )}
             {open && canEdit && (
-              <Button onClick={() => setReturnOpen(true)}>
-                <CheckCircle2 size={15} />
-                Record return
-              </Button>
+              <>
+                <Button variant="secondary" onClick={() => setExtendOpen(true)}>
+                  <CalendarPlus size={15} />
+                  Extend rental
+                </Button>
+                <Button onClick={() => setReturnOpen(true)}>
+                  <CheckCircle2 size={15} />
+                  Record return
+                </Button>
+              </>
             )}
           </>
         }
@@ -264,8 +283,8 @@ export default function RentalDetailPage() {
           className="mb-4"
         >
           It was due back on {formatDateTime(data.expected_return_at)} (
-          {daysBetween(data.expected_return_at, new Date())} day(s) ago) and has not been returned.
-          Follow up with the customer.
+          {daysBetween(data.expected_return_at, new Date())} day(s) ago) and has not been returned.{' '}
+          Follow up with the customer, extend the rental, or record the return.
         </Alert>
       )}
 
@@ -616,6 +635,25 @@ export default function RentalDetailPage() {
           toast.success(`Rental ${data.reference} closed. Balance ${money(updated.computed_balance)}.`)
           rental.reload()
           photos.reload()
+        }}
+      />
+
+      <ExtendModal
+        open={extendOpen}
+        onClose={closeExtendModal}
+        rental={data}
+        currency={currency}
+        onSubmit={async (expectedReturnAt) => {
+          const updated = await repository.rentals.extend(
+            id,
+            { expected_return_at: expectedReturnAt },
+            user,
+          )
+          toast.success(
+            `Rental ${data.reference} extended. New balance ${money(updated.computed_balance)}.`,
+          )
+          closeExtendModal()
+          rental.reload()
         }}
       />
 
@@ -1161,6 +1199,137 @@ function ReturnModal({ open, onClose, rental, currency, pickupPhotos = [], onSub
             tone={balance > 0 ? 'danger' : 'success'}
           />
         </dl>
+      </form>
+    </Modal>
+  )
+}
+
+function ExtendModal({ open, onClose, rental, currency, onSubmit }) {
+  const dueTime = useMemo(() => {
+    const value = toDateTimeInput(rental.expected_return_at)
+    return value.includes('T') ? value.slice(11) : '18:00'
+  }, [rental.expected_return_at])
+
+  const defaultDate = useMemo(() => {
+    const due = toDate(rental.expected_return_at)
+    const next = due && due.getTime() < Date.now()
+      ? addDays(new Date(), 1)
+      : addDays(rental.expected_return_at, 1)
+    return toDateInput(next)
+  }, [rental.expected_return_at])
+
+  const minDate = toDateInput(
+    toDate(rental.expected_return_at)?.getTime() > Date.now()
+      ? addDays(rental.expected_return_at, 1)
+      : new Date(),
+  )
+  const [returnDate, setReturnDate] = useState(defaultDate)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    if (open) {
+      setReturnDate(defaultDate)
+      setError(null)
+    }
+  }, [open, defaultDate])
+
+  const expectedReturnAt = useMemo(() => {
+    if (!returnDate) return null
+    const date = new Date(`${returnDate}T${dueTime}`)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  }, [returnDate, dueTime])
+
+  const quote = expectedReturnAt ? extensionQuote(rental, expectedReturnAt) : null
+
+  const submit = async (event) => {
+    event.preventDefault()
+    setError(null)
+    if (!quote) {
+      setError('Choose a return date after the current due date.')
+      return
+    }
+    setBusy(true)
+    try {
+      await onSubmit(expectedReturnAt)
+    } catch (cause) {
+      setError(cause.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Extend rental"
+      description="The vehicle is already out, so only the return date and the bill change. No odometer reading or new inspection is needed."
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={submit} loading={busy} disabled={!quote}>
+            <CalendarPlus size={15} />
+            Extend rental
+          </Button>
+        </>
+      }
+    >
+      <form onSubmit={submit} className="space-y-4">
+        {error && <Alert tone="danger" icon={AlertTriangle}>{error}</Alert>}
+
+        <Alert tone="info" icon={CalendarPlus}>
+          Currently due back <strong>{formatDateTime(rental.expected_return_at)}</strong> at{' '}
+          <strong>{formatMoney(rental.daily_rate, currency)}/day</strong>.
+        </Alert>
+
+        <Field
+          label="New return date"
+          required
+          hint={`The existing return time (${dueTime}) is kept. Extra days are charged at the daily rate.`}
+        >
+          <Input
+            type="date"
+            min={minDate}
+            value={returnDate}
+            onChange={(event) => setReturnDate(event.target.value)}
+          />
+        </Field>
+
+        {quote ? (
+          <dl className="space-y-2 rounded-lg bg-ink-50 p-4 text-sm">
+            <Row
+              label={`Extra days (${formatDate(rental.expected_return_at)} → ${formatDate(expectedReturnAt)})`}
+              value={`${quote.extraDays} day${quote.extraDays === 1 ? '' : 's'}`}
+            />
+            <Row
+              label={`Extension (${formatMoney(rental.daily_rate, currency)} × ${quote.extraDays})`}
+              value={formatMoney(quote.extensionFee, currency)}
+            />
+            <Row label="Other charges" value={formatMoney(quote.otherCharges, currency)} />
+            <Row label="New rental fee" value={formatMoney(quote.newBase, currency)} strong />
+            <Row label="New total billed" value={formatMoney(quote.newTotal, currency)} strong />
+            <Row label="Already paid" value={formatMoney(quote.paid, currency)} tone="success" />
+            <Row
+              label="New balance"
+              value={quote.newBalance > 0 ? formatMoney(quote.newBalance, currency) : 'Settled'}
+              strong
+              tone={quote.newBalance > 0 ? 'danger' : 'success'}
+            />
+          </dl>
+        ) : (
+          <Alert tone="warning" icon={AlertTriangle}>
+            Choose a date after the current due date to see the new charge and balance.
+          </Alert>
+        )}
+
+        <p className="text-xs text-ink-400">
+          Payments already recorded stay on the rental. The new balance is the updated total minus
+          everything the customer has already paid.
+        </p>
       </form>
     </Modal>
   )

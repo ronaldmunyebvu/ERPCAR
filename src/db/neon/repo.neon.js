@@ -14,6 +14,7 @@ import {
   isOverdue,
   rentalTotal,
   rentalBalance,
+  extensionQuote,
   excessMileageInfo,
   excessMileageCharge,
   startOfDay,
@@ -2039,6 +2040,60 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
             excessMileageCharge: mileageCharge?.amount ?? 0,
             damageDetected: Boolean(damage_report?.damage_detected),
             damageConfidence: damage_report?.confidence ?? 0,
+          },
+        })
+        return this.get(id)
+      },
+
+      /** See the mock repository: extending never asks for mileage or photos. */
+      async extend(id, { expected_return_at }, actor) {
+        const current = await one('SELECT * FROM rentals WHERE id = $1', [id])
+        if (!current) throw new Error('Rental not found')
+        if (current.actual_return_at || !['active', 'overdue'].includes(current.status)) {
+          throw new Error('The rental must still be open to extend it.')
+        }
+
+        const quote = extensionQuote(
+          {
+            ...current,
+            additional_charges: Array.isArray(current.additional_charges)
+              ? current.additional_charges
+              : JSON.parse(current.additional_charges || '[]'),
+          },
+          expected_return_at,
+        )
+        if (!quote) throw new Error('The new return date must be after the current due date.')
+
+        const previousDue = current.expected_return_at
+        const note = `Extended to ${String(expected_return_at).slice(0, 10)} (+${
+          quote.extraDays
+        } day${quote.extraDays === 1 ? '' : 's'}, +${quote.extensionFee}).`
+        await rows(
+          `UPDATE rentals SET expected_return_at = $2, days = $3, total_amount = $4,
+                              status = 'active', notes = $5, updated_at = now()
+            WHERE id = $1`,
+          [
+            id,
+            expected_return_at,
+            quote.totalDays,
+            quote.newBase,
+            note + (current.notes ? `\n${current.notes}` : ''),
+          ],
+        )
+
+        await logActivity({
+          company_id: current.company_id,
+          user_id: actor?.id || null,
+          action: 'rental.extended',
+          entity: 'rental',
+          entity_id: id,
+          summary: `Extended rental ${current.reference} ${note}`,
+          metadata: {
+            reference: current.reference,
+            previous_due: previousDue,
+            expected_return_at,
+            extra_days: quote.extraDays,
+            amount: quote.extensionFee,
           },
         })
         return this.get(id)

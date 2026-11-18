@@ -163,6 +163,9 @@ export const OPERATIONS = {
     actor: 2,
   },
   'rentals.returnCar': { auth: 'member', own: 'rentals', actor: 2 },
+  // A due vehicle is still out with the customer. Only the return date and the
+  // bill change: no odometer, fuel or inspection data is collected again.
+  'rentals.extend': { auth: 'member', own: 'rentals', actor: 2 },
   'rentals.cancel': { auth: 'member', own: 'rentals', actor: 2 },
   'rentals.remove': { auth: 'member', own: 'rentals', actor: 1 },
 
