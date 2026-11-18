@@ -1669,12 +1669,15 @@ export function createMockRepository() {
         const rental = assertFound(data.rentals.find((item) => item.id === id), 'Rental')
         if (rental.actual_return_at) throw new Error('This rental has already been closed.')
 
-        const endMileage = Number(end_mileage)
-        if (!Number.isFinite(endMileage) || endMileage < 0) {
-          throw new Error('Enter the vehicle mileage at return.')
-        }
-        if (rental.start_mileage != null && endMileage < Number(rental.start_mileage)) {
-          throw new Error('The return mileage cannot be less than the pickup mileage.')
+        let endMileage = null
+        if (end_mileage !== null && end_mileage !== undefined && end_mileage !== '') {
+          endMileage = Number(end_mileage)
+          if (!Number.isFinite(endMileage) || endMileage < 0) {
+            throw new Error('The return mileage must be zero or more.')
+          }
+          if (rental.start_mileage != null && endMileage < Number(rental.start_mileage)) {
+            throw new Error('The return mileage must not be less than the pickup mileage.')
+          }
         }
         const pickupSlots = rentalPhotos(data, id)
           .filter((photo) => photo.phase === 'pickup')
@@ -1719,7 +1722,7 @@ export function createMockRepository() {
         const car = data.cars.find((item) => item.id === rental.car_id)
         if (car) {
           car.status = 'available'
-          car.mileage = endMileage
+          if (endMileage != null) car.mileage = endMileage
           car.updated_at = new Date().toISOString()
         }
 

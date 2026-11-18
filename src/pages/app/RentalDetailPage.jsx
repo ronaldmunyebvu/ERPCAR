@@ -852,12 +852,12 @@ function ReturnModal({ open, onClose, rental, currency, pickupPhotos = [], onSub
       setError('Return time cannot be before the pickup time.')
       return
     }
-    if (endMileage == null || Number.isNaN(endMileage) || endMileage < 0) {
-      setError('Enter the vehicle mileage at return.')
+    if (endMileage != null && (!Number.isFinite(endMileage) || endMileage < 0)) {
+      setError('The return mileage must be zero or more.')
       return
     }
-    if (rental.start_mileage != null && endMileage < Number(rental.start_mileage)) {
-      setError('The return mileage cannot be less than the pickup mileage.')
+    if (rental.start_mileage != null && endMileage != null && endMileage < Number(rental.start_mileage)) {
+      setError('The return mileage must not be less than the pickup mileage.')
       return
     }
     if (baselineComplete && returnPhotos.length !== 8) {
@@ -933,10 +933,9 @@ function ReturnModal({ open, onClose, rental, currency, pickupPhotos = [], onSub
           </Field>
           <Field
             label="Odometer at return (km)"
-            required
             hint={
               rental.start_mileage != null
-                ? `Pickup reading: ${formatNumber(rental.start_mileage)} km${
+                ? `Optional · Pickup reading: ${formatNumber(rental.start_mileage)} km${
                     allowanceKm != null
                       ? ` · Allowance: ${formatNumber(allowanceKm)} km (${formatNumber(
                           expectedPerDay,
@@ -947,7 +946,7 @@ function ReturnModal({ open, onClose, rental, currency, pickupPhotos = [], onSub
                       ? ` · Distance: ${formatNumber(distanceCovered)} km`
                       : ''
                   }`
-                : 'Recorded at handover.'
+                : 'Optional · No pickup reading is on file. Leave blank to skip the mileage charge.'
             }
           >
             <Input
@@ -956,7 +955,7 @@ function ReturnModal({ open, onClose, rental, currency, pickupPhotos = [], onSub
               step="1"
               value={values.end_mileage}
               onChange={(event) => setValues({ ...values, end_mileage: event.target.value })}
-              placeholder="e.g. 45890"
+              placeholder="Leave blank if unavailable"
             />
           </Field>
         </div>

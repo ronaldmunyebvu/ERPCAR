@@ -1958,12 +1958,15 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
         if (!current) throw new Error('Rental not found')
         if (current.actual_return_at) throw new Error('This rental has already been closed.')
 
-        const endMileage = Number(end_mileage)
-        if (!Number.isFinite(endMileage) || endMileage < 0) {
-          throw new Error('Enter the vehicle mileage at return.')
-        }
-        if (current.start_mileage != null && endMileage < num(current.start_mileage)) {
-          throw new Error('The return mileage cannot be less than the pickup mileage.')
+        let endMileage = null
+        if (end_mileage !== null && end_mileage !== undefined && end_mileage !== '') {
+          endMileage = Number(end_mileage)
+          if (!Number.isFinite(endMileage) || endMileage < 0) {
+            throw new Error('The return mileage must be zero or more.')
+          }
+          if (current.start_mileage != null && endMileage < num(current.start_mileage)) {
+            throw new Error('The return mileage must not be less than the pickup mileage.')
+          }
         }
         const pickupRows = await rows(
           `SELECT slot FROM rental_photos WHERE rental_id = $1 AND phase = 'pickup'`,
@@ -2017,7 +2020,7 @@ export async function createNeonRepository(connectionString, sql, mail = null) {
           ],
         )
         await rows(
-          `UPDATE cars SET status = 'available', mileage = $2, updated_at = now() WHERE id = $1`,
+          `UPDATE cars SET status = 'available', mileage = COALESCE($2, mileage), updated_at = now() WHERE id = $1`,
           [current.car_id, endMileage],
         )
         await storePhotos(id, current.company_id, 'return', returnPhotos)
