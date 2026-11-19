@@ -251,7 +251,7 @@ export default function RentalDetailPage() {
           <div>
             <h2 className="text-sm font-semibold text-ink-900">Rental agreement</h2>
             <p className="mt-1 text-sm text-ink-500">
-              Download a copy or print the agreement for the customer to review and sign.
+              Download or print the PDF vehicle hire agreement for the customer to review and sign.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -695,7 +695,7 @@ export default function RentalDetailPage() {
         open={agreementOpen}
         onClose={closeAgreement}
         title="Rental agreement generated"
-        description="The agreement between the customer and the rental company is ready. Download it or print it for the customer to sign."
+        description="The PDF agreement between the customer and the rental company is ready. Download it or print it for the customer to sign."
         size="sm"
         footer={
           <>
